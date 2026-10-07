@@ -1,0 +1,96 @@
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util"
+     xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
+  <Package Name="RvtFileInfo Revit Manifests"
+           Manufacturer="Metropolitan CIM"
+           Version="1.2.0.0"
+           UpgradeCode="F3B6C0E5-4089-4D12-8C37-8E5F1B2D4F69"
+           Scope="perMachine"
+           Compressed="yes">
+    <SummaryInformation Description="Writes RvtFileInfo.addin manifests so Revit loads the add-in. Install the Revit add-in MSI first." />
+    <MajorUpgrade DowngradeErrorMessage="A newer version of RvtFileInfo Revit Manifests is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+    <Launch Condition="VersionNT64" Message="RvtFileInfo Revit Manifests requires 64-bit Windows 11." />
+
+    <Property Id="INSTALLALLYEARS" Value="0" Secure="yes" />
+    <Property Id="ADDINDIR" Secure="yes">
+      <RegistrySearch Id="FindAddinDir"
+                      Root="HKLM"
+                      Key="SOFTWARE\RvtFileInfo.Addin"
+                      Name="InstallDir"
+                      Type="raw" />
+    </Property>
+
+    <WixVariable Id="WixUILicenseRtf" Value="$(var.LicenseRtf)" />
+
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="RFIROOT" Name="RvtFileInfo">
+        <Directory Id="INSTALLFOLDER" Name="Manifests" />
+      </Directory>
+    </StandardDirectory>
+
+    <Feature Id="Main" Title="RvtFileInfo Revit Manifests" Level="1">
+      <ComponentGroupRef Id="ProductFiles" />
+    </Feature>
+
+    <SetProperty Id="ADDINDIR"
+                 Value="[ProgramFiles64Folder]RvtFileInfo\RevitAddin"
+                 After="CostFinalize"
+                 Sequence="execute"
+                 Condition="NOT ADDINDIR" />
+    <SetProperty Id="SetupInstall"
+                 Value="&quot;[INSTALLFOLDER]RvtFileInfo.Setup.exe&quot; manifests install --allyears [INSTALLALLYEARS] --addindir &quot;[ADDINDIR]&quot;"
+                 Before="SetupInstall"
+                 Sequence="execute" />
+    <SetProperty Id="SetupUninstall"
+                 Value="&quot;[INSTALLFOLDER]RvtFileInfo.Setup.exe&quot; manifests uninstall"
+                 Before="SetupUninstall"
+                 Sequence="execute" />
+    <CustomAction Id="SetupInstall"
+                  BinaryRef="Wix4UtilCA_X64"
+                  DllEntry="WixQuietExec"
+                  Execute="deferred"
+                  Impersonate="no"
+                  Return="check" />
+    <CustomAction Id="SetupUninstall"
+                  BinaryRef="Wix4UtilCA_X64"
+                  DllEntry="WixQuietExec"
+                  Execute="deferred"
+                  Impersonate="no"
+                  Return="check" />
+
+    <ui:WixUI Id="WixUI_Minimal" />
+
+    <InstallUISequence>
+      <Show Dialog="RfiManifestDlg" Before="ExecuteAction" Condition="NOT Installed" />
+    </InstallUISequence>
+    <InstallExecuteSequence>
+      <Custom Action="SetupUninstall" Before="RemoveFiles" Condition="REMOVE~=&quot;ALL&quot;" />
+      <Custom Action="SetupInstall" After="InstallFiles" Condition="NOT REMOVE~=&quot;ALL&quot;" />
+    </InstallExecuteSequence>
+  </Package>
+
+  <Fragment>
+    <ComponentGroup Id="ProductFiles" Directory="INSTALLFOLDER">
+      <Files Include="$(var.StageDir)\**" />
+    </ComponentGroup>
+  </Fragment>
+
+  <Fragment>
+    <UI>
+      <Dialog Id="RfiManifestDlg" Width="370" Height="230" Title="RvtFileInfo Revit Manifests">
+        <Control Id="Title" Type="Text" X="20" Y="20" Width="330" Height="50"
+                 Text="Register RvtFileInfo.addin so Revit loads the add-in from Program Files\RvtFileInfo\RevitAddin. Install the Revit add-in MSI first." />
+        <Control Id="Years" Type="CheckBox" X="20" Y="90" Width="330" Height="32"
+                 Property="INSTALLALLYEARS" CheckBoxValue="1"
+                 Text="Write manifests for 2025, 2026, and 2027 even if that year is not installed" />
+        <Control Id="Install" Type="PushButton" X="230" Y="190" Width="56" Height="17" Default="yes" Text="Install">
+          <Publish Event="EndDialog" Value="Return" />
+        </Control>
+        <Control Id="Cancel" Type="PushButton" X="294" Y="190" Width="56" Height="17" Cancel="yes" Text="Cancel">
+          <Publish Event="EndDialog" Value="Exit" />
+        </Control>
+      </Dialog>
+    </UI>
+  </Fragment>
+</Wix>

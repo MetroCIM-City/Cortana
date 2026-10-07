@@ -39,6 +39,16 @@ The thumbnail value under `HKCR\.rvt\shellex\{BB2E617C-0920-11d1-9A0B-00C04FC2D6
 
 `%ProgramData%\RvtFileInfo\picklists.json` is optional. Keys are the display labels (`Discipline`, `Location`, `Originator`, `Sub Discipline`, `Document Type`, `Program`, `Sub Program`). Values are arrays of strings. The Revit dialog shows them in an editable combo box. Uninstall deletes this file only when its contents still match the hash stored at install time.
 
+## Three installers
+
+| MSI | Setup command |
+| --- | --- |
+| Explorer | `RvtFileInfo.Setup.exe shell install\|uninstall` |
+| Revit add-in | files only (`Program Files\RvtFileInfo\RevitAddin`) |
+| Manifests | `RvtFileInfo.Setup.exe manifests install\|uninstall` |
+
+Manifest state is `HKLM\SOFTWARE\RvtFileInfo.Manifests`. Explorer state is `HKLM\SOFTWARE\RvtFileInfo`. Uninstalling Explorer does not remove Revit manifests.
+
 ## Values missing after Revit save
 
 Explorer writes the `RvtFileInfo` stream directly. Revit rewrites the project file on save. The add-in writes the stream again from Project Information after Save, Save As, and Sync with Central. If the add-in is not loaded, a save can drop a value that was typed only in Explorer.

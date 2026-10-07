@@ -1,0 +1,48 @@
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
+  <Package Name="RvtFileInfo Revit Add-in"
+           Manufacturer="Metropolitan CIM"
+           Version="1.2.0.0"
+           UpgradeCode="E2A5B9D4-3F78-4C01-9B26-7D4E0A1C3E58"
+           Scope="perMachine"
+           Compressed="yes">
+    <SummaryInformation Description="Revit 2025–2027 add-in binaries for RvtFileInfo. Does not register Revit manifests." />
+    <MajorUpgrade DowngradeErrorMessage="A newer version of RvtFileInfo Revit Add-in is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+    <Launch Condition="VersionNT64" Message="RvtFileInfo Revit Add-in requires 64-bit Windows 11." />
+
+    <WixVariable Id="WixUILicenseRtf" Value="$(var.LicenseRtf)" />
+
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="RvtFileInfo">
+        <Directory Id="ADDINFOLDER" Name="RevitAddin" />
+      </Directory>
+    </StandardDirectory>
+    <StandardDirectory Id="CommonAppDataFolder">
+      <Directory Id="RFI_APPDATA" Name="RvtFileInfo" />
+    </StandardDirectory>
+
+    <Feature Id="Main" Title="RvtFileInfo Revit Add-in" Level="1">
+      <ComponentGroupRef Id="AddinFiles" />
+      <ComponentRef Id="Picklists" />
+      <ComponentRef Id="AddinReg" />
+    </Feature>
+
+    <ui:WixUI Id="WixUI_Minimal" />
+  </Package>
+
+  <Fragment>
+    <ComponentGroup Id="AddinFiles" Directory="ADDINFOLDER">
+      <Files Include="$(var.StageDir)\**" />
+    </ComponentGroup>
+  </Fragment>
+
+  <Fragment>
+    <Component Id="Picklists" Directory="RFI_APPDATA" Guid="A11D1001-7C4E-4B2A-9F10-6E8D3C5B1A09" NeverOverwrite="yes">
+      <File Source="$(var.PicklistFile)" Name="picklists.json" />
+    </Component>
+    <Component Id="AddinReg" Directory="ADDINFOLDER" Guid="A11D1002-7C4E-4B2A-9F10-6E8D3C5B1A0A">
+      <RegistryValue Root="HKLM" Key="SOFTWARE\RvtFileInfo.Addin" Name="InstallDir" Type="string" Value="[ADDINFOLDER]" KeyPath="yes" />
+    </Component>
+  </Fragment>
+</Wix>

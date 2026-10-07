@@ -1,6 +1,5 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
-using System.Security.Cryptography;
 using System.Text;
 using Microsoft.Win32;
 
@@ -26,21 +25,45 @@ Directory.CreateDirectory(logDir);
 
 try
 {
-    if (args.Length == 0) return Fail("Usage: RvtFileInfo.Setup install|uninstall");
-    return args[0].Equals("uninstall", StringComparison.OrdinalIgnoreCase) ? Uninstall() : Install(args);
+    if (args.Length == 0) return Fail(Usage());
+    return Dispatch(args);
 }
 catch (Exception ex)
 {
     return Fail(ex.ToString());
 }
 
-int Install(string[] installArgs)
+static string Usage() => """
+    Usage: RvtFileInfo.Setup shell install|uninstall [--restart 0|1]
+           RvtFileInfo.Setup manifests install|uninstall [--allyears 0|1] [--addindir PATH]
+    """;
+
+int Dispatch(string[] source)
+{
+    var verb = source[0];
+    if (verb.Equals("uninstall", StringComparison.OrdinalIgnoreCase)) return UninstallShell();
+    if (verb.Equals("install", StringComparison.OrdinalIgnoreCase)) return InstallShell(source);
+
+    if (verb.Equals("shell", StringComparison.OrdinalIgnoreCase))
+    {
+        if (source.Length < 2) return Fail(Usage());
+        return source[1].Equals("uninstall", StringComparison.OrdinalIgnoreCase) ? UninstallShell() : InstallShell(source);
+    }
+
+    if (verb.Equals("manifests", StringComparison.OrdinalIgnoreCase))
+    {
+        if (source.Length < 2) return Fail(Usage());
+        return source[1].Equals("uninstall", StringComparison.OrdinalIgnoreCase) ? UninstallManifests() : InstallManifests(source);
+    }
+
+    return Fail(Usage());
+}
+
+int InstallShell(string[] installArgs)
 {
     if (Environment.OSVersion.Version.Build < 22000 || !Environment.Is64BitOperatingSystem)
         return Fail("Windows 11 x64 (build 22000 or later) is required.");
 
-    var addin = Flag(installArgs, "--addin", "1") != "0";
-    var allYears = Flag(installArgs, "--allyears", "0") == "1";
     var restart = Flag(installArgs, "--restart", "0") == "1";
 
     using var machine = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, RegistryView.Registry64);
@@ -50,18 +73,16 @@ int Install(string[] installArgs)
     RegisterHandler(machine);
     RegisterSchema();
     AppendDetails(classes);
-    if (addin) WriteManifests(allYears);
     Native.SHChangeNotify(0x08000000, 0x0000, 0, 0);
     if (restart) RestartExplorer();
-    Log("Install completed.");
+    Log("Shell install completed.");
     return 0;
 }
 
-int Uninstall()
+int UninstallShell()
 {
     using var machine = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, RegistryView.Registry64);
     using var classes = machine.CreateSubKey(@"SOFTWARE\Classes") ?? throw new InvalidOperationException("Could not open HKLM\\SOFTWARE\\Classes.");
-    RemoveManifests(machine);
     RestoreDetails(classes, machine);
     RestoreHandler(machine);
     UnregisterSchema();
@@ -70,10 +91,29 @@ int Uninstall()
     {
         approved?.DeleteValue(Clsid, false);
     }
-    RemoveUnchangedPicklist();
     machine.DeleteSubKeyTree(@"SOFTWARE\RvtFileInfo", false);
     Native.SHChangeNotify(0x08000000, 0x0000, 0, 0);
-    Log("Uninstall completed.");
+    Log("Shell uninstall completed.");
+    return 0;
+}
+
+int InstallManifests(string[] installArgs)
+{
+    if (Environment.OSVersion.Version.Build < 22000 || !Environment.Is64BitOperatingSystem)
+        return Fail("Windows 11 x64 (build 22000 or later) is required.");
+
+    var allYears = Flag(installArgs, "--allyears", "0") == "1";
+    var addinDir = Flag(installArgs, "--addindir", "");
+    if (string.IsNullOrWhiteSpace(addinDir)) addinDir = RegisteredAddinDir();
+    WriteManifests(addinDir, allYears);
+    Log("Manifest install completed.");
+    return 0;
+}
+
+int UninstallManifests()
+{
+    RemoveManifests();
+    Log("Manifest uninstall completed.");
     return 0;
 }
 
@@ -298,31 +338,35 @@ void UnregisterSchema()
     Native.PSRefreshPropertySchema();
 }
 
-void WriteManifests(bool allYears)
+void WriteManifests(string addinDir, bool allYears)
 {
     using var machine = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, RegistryView.Registry64);
-    using var key = machine.CreateSubKey(@"SOFTWARE\RvtFileInfo");
+    using var key = machine.CreateSubKey(@"SOFTWARE\RvtFileInfo.Manifests");
     var written = new List<string>();
     foreach (var year in new[] { 2025, 2026, 2027 })
     {
         if (!allYears && !RevitInstalled(year)) continue;
+        var assembly = Path.Combine(addinDir, year.ToString(), "RvtFileInfo.RevitAddin.dll");
+        if (!File.Exists(assembly))
+        {
+            Log($"Skipped {year}: add-in not found at {assembly}");
+            continue;
+        }
         var folder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "Autodesk", "Revit", "Addins", year.ToString());
         Directory.CreateDirectory(folder);
         var manifest = Path.Combine(folder, "RvtFileInfo.addin");
-        var assembly = Path.Combine(installDir, "RevitAddin", year.ToString(), "RvtFileInfo.RevitAddin.dll");
         File.WriteAllText(manifest, Manifest(assembly));
         written.Add(manifest);
+        Log($"Wrote {manifest}");
     }
     key.SetValue("Manifests", written.ToArray(), RegistryValueKind.MultiString);
-    var pick = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "RvtFileInfo", "picklists.json");
-    var shipped = Path.Combine(installDir, "picklists.json");
-    if (!File.Exists(pick) && File.Exists(shipped)) File.Copy(shipped, pick);
-    if (File.Exists(pick)) key.SetValue("PicklistHash", Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(pick))));
+    key.SetValue("AddinDir", addinDir);
 }
 
-void RemoveManifests(RegistryKey machine)
+void RemoveManifests()
 {
-    using var key = machine.OpenSubKey(@"SOFTWARE\RvtFileInfo");
+    using var machine = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, RegistryView.Registry64);
+    using var key = machine.OpenSubKey(@"SOFTWARE\RvtFileInfo.Manifests");
     if (key?.GetValue("Manifests") is string[] paths)
     {
         foreach (var path in paths)
@@ -330,17 +374,15 @@ void RemoveManifests(RegistryKey machine)
             if (File.Exists(path)) File.Delete(path);
         }
     }
+    machine.DeleteSubKeyTree(@"SOFTWARE\RvtFileInfo.Manifests", false);
 }
 
-void RemoveUnchangedPicklist()
+static string RegisteredAddinDir()
 {
     using var machine = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, RegistryView.Registry64);
-    using var key = machine.OpenSubKey(@"SOFTWARE\RvtFileInfo");
-    var expected = key?.GetValue("PicklistHash") as string;
-    var pick = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "RvtFileInfo", "picklists.json");
-    if (!File.Exists(pick) || string.IsNullOrEmpty(expected)) return;
-    var actual = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(pick)));
-    if (string.Equals(actual, expected, StringComparison.OrdinalIgnoreCase)) File.Delete(pick);
+    using var key = machine.OpenSubKey(@"SOFTWARE\RvtFileInfo.Addin");
+    if (key?.GetValue("InstallDir") is string installed && !string.IsNullOrWhiteSpace(installed)) return installed.TrimEnd('\\');
+    return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "RvtFileInfo", "RevitAddin");
 }
 
 static bool RevitInstalled(int year)

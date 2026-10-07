@@ -1,6 +1,6 @@
 #Requires -Version 5.1
 param(
-    [string]$Version = '1.1.0',
+    [string]$Version = '1.2.0',
     [switch]$SkipNative,
     [switch]$SkipInstaller
 )
@@ -60,22 +60,27 @@ Invoke-Step 'Addin.Tests' { & $dotnet8 test (Join-Path $root 'tests\Addin.Tests\
 
 if ($SkipInstaller) { return }
 
-if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
-New-Item -ItemType Directory -Force -Path $stage, $dist | Out-Null
+$stageShell = Join-Path $root 'artifacts\stage\shell'
+$stageAddin = Join-Path $root 'artifacts\stage\addin'
+$stageManifests = Join-Path $root 'artifacts\stage\manifests'
+foreach ($dir in @($stage, $stageShell, $stageAddin, $stageManifests, $dist)) {
+    if (Test-Path $dir) { Remove-Item $dir -Recurse -Force }
+    New-Item -ItemType Directory -Force -Path $dir | Out-Null
+}
 
-Invoke-Step 'publish setup' { & $dotnet8 publish (Join-Path $root 'src\Setup\RvtFileInfo.Setup.csproj') -c Release -r win-x64 --self-contained true -o $stage }
-Invoke-Step 'publish cli' { & $dotnet8 publish (Join-Path $root 'src\EditorCli\RvtFileInfo.EditorCli.csproj') -c Release -r win-x64 --self-contained true -o (Join-Path $stage 'cli') }
+Invoke-Step 'publish setup (shell)' { & $dotnet8 publish (Join-Path $root 'src\Setup\RvtFileInfo.Setup.csproj') -c Release -r win-x64 --self-contained true -o $stageShell }
+Invoke-Step 'publish cli' { & $dotnet8 publish (Join-Path $root 'src\EditorCli\RvtFileInfo.EditorCli.csproj') -c Release -r win-x64 --self-contained true -o (Join-Path $stageShell 'cli') }
+Invoke-Step 'publish setup (manifests)' { & $dotnet8 publish (Join-Path $root 'src\Setup\RvtFileInfo.Setup.csproj') -c Release -r win-x64 --self-contained true -o $stageManifests }
 
-Copy-Item (Join-Path $artifacts 'RvtFileInfo.Store.dll') $stage -Force
-Copy-Item (Join-Path $artifacts 'RvtFileInfo.ShellHandler.dll') $stage -Force
-Copy-Item (Join-Path $artifacts 'RvtFileInfo.Store.dll') (Join-Path $stage 'cli') -Force
-Copy-Item (Join-Path $root 'src\ShellHandler\RvtFileInfo.propdesc') $stage -Force
-Copy-Item (Join-Path $root 'src\Setup\picklists.json') $stage -Force
+Copy-Item (Join-Path $artifacts 'RvtFileInfo.Store.dll') $stageShell -Force
+Copy-Item (Join-Path $artifacts 'RvtFileInfo.ShellHandler.dll') $stageShell -Force
+Copy-Item (Join-Path $artifacts 'RvtFileInfo.Store.dll') (Join-Path $stageShell 'cli') -Force
+Copy-Item (Join-Path $root 'src\ShellHandler\RvtFileInfo.propdesc') $stageShell -Force
 
 foreach ($year in 2025, 2026, 2027) {
     $config = switch ($year) { 2025 { 'R25' } 2026 { 'R26' } 2027 { 'R27' } }
     $from = Join-Path $root "src\RevitAddin\bin\$config"
-    $to = Join-Path $stage "RevitAddin\$year"
+    $to = Join-Path $stageAddin "$year"
     New-Item -ItemType Directory -Force -Path $to | Out-Null
     Copy-Item (Join-Path $from 'RvtFileInfo.RevitAddin.dll') $to -Force
     Copy-Item (Join-Path $from 'RvtFileInfo.RevitAddin.deps.json') $to -Force
@@ -85,28 +90,37 @@ foreach ($year in 2025, 2026, 2027) {
 }
 
 $wix = Join-Path $root '.tools\wix.exe'
-$msi = Join-Path $dist "RvtFileInfo-$Version-x64.msi"
-Invoke-Step 'msi' {
-    & $wix build (Join-Path $root 'src\Installer\Package.wxs') `
-        -ext WixToolset.Util.wixext/5.0.2 `
-        -ext WixToolset.UI.wixext/5.0.2 `
-        -d "StageDir=$stage" `
-        -d "LicenseRtf=$(Join-Path $root 'src\Installer\License.rtf')" `
-        -arch x64 `
-        -o $msi
-}
+$license = Join-Path $root 'src\Installer\License.rtf'
+$packages = @(
+    @{ Name = 'shell'; Wxs = 'Package.wxs'; Stage = $stageShell; Out = "RvtFileInfo-$Version-x64.msi"; Extra = @() }
+    @{ Name = 'addin'; Wxs = 'Package.Addin.wxs'; Stage = $stageAddin; Out = "RvtFileInfo.RevitAddin-$Version-x64.msi"; Extra = @("-d", "PicklistFile=$(Join-Path $root 'src\Setup\picklists.json')") }
+    @{ Name = 'manifests'; Wxs = 'Package.Manifests.wxs'; Stage = $stageManifests; Out = "RvtFileInfo.Manifests-$Version-x64.msi"; Extra = @() }
+)
 
-if ($env:SIGN_CERT_THUMBPRINT) {
-    $signtool = Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\bin\*\x64\signtool.exe' -ErrorAction SilentlyContinue | Sort-Object FullName -Descending | Select-Object -First 1
-    if (-not $signtool) { throw 'SIGN_CERT_THUMBPRINT is set but signtool.exe was not found.' }
-    Invoke-Step 'sign' {
-        & $signtool.FullName sign /fd SHA256 /sha1 $env:SIGN_CERT_THUMBPRINT $msi
+$sums = @()
+foreach ($package in $packages) {
+    $msi = Join-Path $dist $package.Out
+    Invoke-Step $package.Name {
+        $wixArgs = @(
+            'build', (Join-Path $root "src\Installer\$($package.Wxs)"),
+            '-ext', 'WixToolset.Util.wixext/5.0.2',
+            '-ext', 'WixToolset.UI.wixext/5.0.2',
+            '-d', "StageDir=$($package.Stage)",
+            '-d', "LicenseRtf=$license",
+            '-arch', 'x64',
+            '-o', $msi
+        ) + $package.Extra
+        & $wix @wixArgs
     }
+    if ($env:SIGN_CERT_THUMBPRINT) {
+        $signtool = Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\bin\*\x64\signtool.exe' -ErrorAction SilentlyContinue | Sort-Object FullName -Descending | Select-Object -First 1
+        if (-not $signtool) { throw 'SIGN_CERT_THUMBPRINT is set but signtool.exe was not found.' }
+        Invoke-Step "sign $($package.Name)" { & $signtool.FullName sign /fd SHA256 /sha1 $env:SIGN_CERT_THUMBPRINT $msi }
+    }
+    $hash = Get-FileHash $msi -Algorithm SHA256
+    $sums += "$($hash.Hash)  $($package.Out)"
+    Write-Host "Package: $msi"
+    Write-Host "SHA256: $($hash.Hash)"
 }
 
-$hash = Get-FileHash $msi -Algorithm SHA256
-@(
-    "$($hash.Hash)  $(Split-Path $msi -Leaf)"
-) | Set-Content -Path (Join-Path $dist 'SHA256SUMS.txt') -Encoding ascii
-Write-Host "Package: $msi"
-Write-Host "SHA256: $($hash.Hash)"
+$sums | Set-Content -Path (Join-Path $dist 'SHA256SUMS.txt') -Encoding ascii

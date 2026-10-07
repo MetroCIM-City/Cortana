@@ -18,30 +18,35 @@ Supported extensions: **`.rvt` `.rfa` `.dwg` `.nwd` `.nwf` `.nwc` `.pdf`**.
 
 ## Install
 
-Use **version 1.1.0**. Version 1.0.0 only registered `.rvt`.
+There are **three** per-machine x64 MSIs (Windows 11 build 22000+). Install as administrator, in this order if you use Revit:
 
-1. Close File Explorer property windows and any open Revit / AutoCAD / Navisworks / PDF files you care about.
-2. Right-click `dist\RvtFileInfo-1.1.0-x64.msi` and install as administrator.
-3. Leave **Restart File Explorer** checked (default in the UI).
-4. Confirm the Revit add-in option if you use Revit 2025–2027.
+| Package | File | What it does |
+| --- | --- | --- |
+| Explorer | `dist\RvtFileInfo-1.2.0-x64.msi` | Property handler, Details columns, `rvtinfo` |
+| Revit add-in | `dist\RvtFileInfo.RevitAddin-1.2.0-x64.msi` | Add-in DLLs under `Program Files\RvtFileInfo\RevitAddin\<year>` |
+| Revit manifests | `dist\RvtFileInfo.Manifests-1.2.0-x64.msi` | Writes `%ProgramData%\Autodesk\Revit\Addins\<year>\RvtFileInfo.addin` |
 
-Silent install:
+Install them separately:
+
+1. **Explorer** — File Explorer Details only. No Revit.
+2. **Revit add-in** — copies `RvtFileInfo.RevitAddin.dll` (and `RvtFileInfo.Store.dll`) for 2025, 2026, and 2027. Does **not** write `.addin` files, so Revit will not load the add-in yet.
+3. **Revit manifests** — writes `%ProgramData%\Autodesk\Revit\Addins\<year>\RvtFileInfo.addin` pointing at the add-in folder. Does **not** copy DLLs. Install the add-in MSI first.
 
 ```text
-msiexec /i RvtFileInfo-1.1.0-x64.msi /qn RESTARTEXPLORER=1
-msiexec /i RvtFileInfo-1.1.0-x64.msi /qn INSTALLADDIN=0
-msiexec /i RvtFileInfo-1.1.0-x64.msi /qn INSTALLALLYEARS=1
+msiexec /i RvtFileInfo-1.2.0-x64.msi /qn RESTARTEXPLORER=1
+msiexec /i RvtFileInfo.RevitAddin-1.2.0-x64.msi /qn
+msiexec /i RvtFileInfo.Manifests-1.2.0-x64.msi /qn
+msiexec /i RvtFileInfo.Manifests-1.2.0-x64.msi /qn INSTALLALLYEARS=1
+msiexec /i RvtFileInfo.Manifests-1.2.0-x64.msi /qn ADDINDIR="C:\Program Files\RvtFileInfo\RevitAddin"
 ```
 
-| Property | Default | Meaning |
-| --- | --- | --- |
-| `INSTALLADDIN` | `1` | Install the Revit add-in |
-| `INSTALLALLYEARS` | `0` | `0` = manifest only for years that have `Revit.exe`; `1` = 2025, 2026, and 2027 |
-| `RESTARTEXPLORER` | `0` (silent) / `1` (UI) | Restart Explorer so Details appear immediately |
+| Property | Package | Default | Meaning |
+| --- | --- | --- | --- |
+| `RESTARTEXPLORER` | Explorer | `0` silent / `1` UI | Restart Explorer so Details appear immediately |
+| `INSTALLALLYEARS` | Manifests | `0` | `0` = years that have `Revit.exe`; `1` = 2025, 2026, and 2027 |
+| `ADDINDIR` | Manifests | `Program Files\RvtFileInfo\RevitAddin` | Folder that contains `2025`, `2026`, and `2027` |
 
-Requires Windows 11 x64 (build 22000 or later). Per-machine install.
-
-If 1.0.0 is already installed, install 1.1.0 on top of it. Do not keep using `RvtFileInfo-1.0.0-x64.msi`.
+If an older combined 1.0 / 1.1 MSI is installed, install Explorer 1.2.0 to replace it, then install the add-in and manifest packages.
 
 ## Use in File Explorer
 
@@ -84,19 +89,22 @@ Same commands work with `.rfa`, `.dwg`, `.nwd`, `.nwf`, `.nwc`, and `.pdf`.
 
 ## Uninstall
 
-Settings → Apps → **RvtFileInfo**, or:
+Uninstall each package from Settings → Apps, or:
 
 ```text
-msiexec /x RvtFileInfo-1.1.0-x64.msi /qn
+msiexec /x RvtFileInfo.Manifests-1.2.0-x64.msi /qn
+msiexec /x RvtFileInfo.RevitAddin-1.2.0-x64.msi /qn
+msiexec /x RvtFileInfo-1.2.0-x64.msi /qn
 ```
 
-Uninstall restores a previous Explorer property handler (for example DWG or PDF) if one was backed up. Autodesk thumbnail handlers are not changed. Streams and sidecar files already written into documents are left in place.
+Removing manifests unloads the add-in from Revit and leaves the DLLs. Removing the add-in removes the DLLs. Removing Explorer restores a previous property handler (DWG/PDF) if one was backed up. Thumbnails are not changed. Streams already written into documents stay.
 
 ## Troubleshooting
 
 | Symptom | What to do |
 | --- | --- |
-| Details missing on DWG / RFA / NWD / PDF | Install **1.1.0**, not 1.0.0. Restart Explorer. |
+| Details missing on DWG / RFA / NWD / PDF | Install Explorer **1.2.0**. Restart Explorer. |
+| Revit has no File Info tab | Install the add-in MSI, then the manifest MSI. |
 | Names show but you cannot type | Click the **value** cell, not the name. Close the file in Revit, AutoCAD, Navisworks, or the PDF viewer. Restart Explorer after upgrade. |
 | Columns missing after install | Restart Explorer, or sign out. Silent install needs `RESTARTEXPLORER=1`. |
 | Values vanish after Revit Save | Load the add-in (File Info tab). Without it, Revit can drop the Explorer stream. |
@@ -114,7 +122,7 @@ Logs:
 .\build.ps1
 ```
 
-Output: `dist\RvtFileInfo-<version>-x64.msi` and `dist\SHA256SUMS.txt`.
+Output: three MSIs in `dist\` plus `SHA256SUMS.txt`.
 
 Needs MSVC (ATL, Windows SDK), .NET 8 SDK (2025/2026 add-in and Setup), .NET 10 SDK (2027 add-in), WiX Toolset 5.
 

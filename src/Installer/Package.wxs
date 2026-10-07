@@ -3,17 +3,15 @@
      xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
   <Package Name="RvtFileInfo"
            Manufacturer="Metropolitan CIM"
-           Version="1.1.0.0"
+           Version="1.2.0.0"
            UpgradeCode="D1F4A8C3-2E67-4B90-8A15-6C3E9F0B2D47"
            Scope="perMachine"
            Compressed="yes">
-    <SummaryInformation Description="Revit file properties for Windows Explorer" />
+    <SummaryInformation Description="Revit, DWG, Navisworks, and PDF file properties for Windows Explorer" />
     <MajorUpgrade DowngradeErrorMessage="A newer version of RvtFileInfo is already installed." />
     <MediaTemplate EmbedCab="yes" />
     <Launch Condition="VersionNT64" Message="RvtFileInfo requires 64-bit Windows 11." />
 
-    <Property Id="INSTALLADDIN" Value="1" Secure="yes" />
-    <Property Id="INSTALLALLYEARS" Value="0" Secure="yes" />
     <Property Id="RESTARTEXPLORER" Value="0" Secure="yes" />
 
     <WixVariable Id="WixUILicenseRtf" Value="$(var.LicenseRtf)" />
@@ -27,11 +25,11 @@
     </Feature>
 
     <SetProperty Id="SetupInstall"
-                 Value="&quot;[INSTALLFOLDER]RvtFileInfo.Setup.exe&quot; install --addin [INSTALLADDIN] --allyears [INSTALLALLYEARS] --restart [RESTARTEXPLORER]"
+                 Value="&quot;[INSTALLFOLDER]RvtFileInfo.Setup.exe&quot; shell install --restart [RESTARTEXPLORER]"
                  Before="SetupInstall"
                  Sequence="execute" />
     <SetProperty Id="SetupUninstall"
-                 Value="&quot;[INSTALLFOLDER]RvtFileInfo.Setup.exe&quot; uninstall"
+                 Value="&quot;[INSTALLFOLDER]RvtFileInfo.Setup.exe&quot; shell uninstall"
                  Before="SetupUninstall"
                  Sequence="execute" />
     <CustomAction Id="SetupInstall"
@@ -69,19 +67,15 @@
 
   <Fragment>
     <UI>
-      <Dialog Id="RfiOptionsDlg" Width="370" Height="250" Title="RvtFileInfo">
-        <Control Id="Title" Type="Text" X="20" Y="20" Width="330" Height="40"
-                 Text="Install the seven Revit file properties into File Explorer." />
-        <Control Id="Addin" Type="CheckBox" X="20" Y="70" Width="330" Height="18"
-                 Property="INSTALLADDIN" CheckBoxValue="1" Text="Install the Revit add-in" />
-        <Control Id="Years" Type="CheckBox" X="20" Y="95" Width="330" Height="18"
-                 Property="INSTALLALLYEARS" CheckBoxValue="1" Text="Install manifests for Revit 2025, 2026, and 2027" />
-        <Control Id="Restart" Type="CheckBox" X="20" Y="120" Width="330" Height="18"
+      <Dialog Id="RfiOptionsDlg" Width="370" Height="220" Title="RvtFileInfo">
+        <Control Id="Title" Type="Text" X="20" Y="20" Width="330" Height="50"
+                 Text="Install the seven file properties into File Explorer. The Revit add-in and Revit manifests are separate installers." />
+        <Control Id="Restart" Type="CheckBox" X="20" Y="90" Width="330" Height="18"
                  Property="RESTARTEXPLORER" CheckBoxValue="1" Text="Restart File Explorer when finished" />
-        <Control Id="Install" Type="PushButton" X="230" Y="210" Width="56" Height="17" Default="yes" Text="Install">
+        <Control Id="Install" Type="PushButton" X="230" Y="180" Width="56" Height="17" Default="yes" Text="Install">
           <Publish Event="EndDialog" Value="Return" />
         </Control>
-        <Control Id="Cancel" Type="PushButton" X="294" Y="210" Width="56" Height="17" Cancel="yes" Text="Cancel">
+        <Control Id="Cancel" Type="PushButton" X="294" Y="180" Width="56" Height="17" Cancel="yes" Text="Cancel">
           <Publish Event="EndDialog" Value="Exit" />
         </Control>
       </Dialog>
