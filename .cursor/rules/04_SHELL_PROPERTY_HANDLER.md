@@ -1,76 +1,67 @@
-# 04 — Shell Property Handler + Property Schema (always built, both tracks)
+# 04 — Shell Property Handler + Property Schema
 
 ## Technology
-- **C++20, MSVC, ATL/WRL COM DLL, x64.** (Optional later: ARM64 build — Revit itself is x64, so not required.)
-- No managed code in the handler.
+C++20, MSVC ATL, x64 COM DLL `RvtFileInfo.ShellHandler.dll`. Toolset v145 (override `RfiToolset`). `/sdl`, `/GS`, `/guard:cf`. No managed code in the handler.
 
 ## COM class
-`RvtFileInfoPropertyHandler` implements:
-- `IInitializeWithStream` (preferred; works with the sandboxed property host)
-- `IPropertyStore` (GetCount, GetAt, GetValue, SetValue, Commit)
-- `IPropertyStoreCapabilities` (`IsPropertyWritable` → true for our 7 properties only)
-- `IPropertyStoreCapabilities`-compatible read-only behaviour when the stream is read-only
-- Thread model: **Both**. Register with `AppID` + `DllSurrogate` only if the ADR requires it; otherwise default prophost.
+CLSID `{C4A91E72-5D38-4F0B-9E16-2B7A6C8D4E50}` (`CRvtPropertyHandler` in `PropertyHandler.cpp`).
+
+Implements:
+- `IInitializeWithStream`
+- `IInitializeWithFile`
+- `IInitializeWithItem`
+- `IPropertyStore`
+- `IPropertyStoreCapabilities`
+
+ThreadingModel **Both**. No `DisableProcessIsolation`. No extra AppID/DllSurrogate unless a new ADR requires it.
+
+Process isolation stays on: `IInitializeWithFile` is used when Explorer gives a path; `IInitializeWithStream` is preferred when isolated. Path is also taken from `STATSTG.pwcsName` when it is a real filesystem path. Persist **prefers `WriteFile(path)`** so S1/S4 run; only if that fails **and** the source is a leading CFB does it `WriteStream` / `IDestinationStreamFactory`. Do not `WriteStream` a non-CFB host as if it were a compound file (that would corrupt DWG/PDF).
 
 ### Behaviour
-- `Initialize(IStream*, grfMode)`: open the store from the stream. Read **only** what is needed (CFB header → directory → our stream). Cache values in a `PROPVARIANT` map.
-- `GetValue(key)`: return `VT_LPWSTR` for our 7 keys; `VT_EMPTY` when unset.
-- `SetValue`: validate (≤256 chars, strip control chars), stage in memory.
-- `Commit`: use the safe-write rules from file 03 (for S1, via `IDestinationStreamFactory` / transacted storage; for S2/S3 the handler needs a path → see *File-based store note*).
-- **File-based store note (S2/S3):** these need a file path. Implement `IInitializeWithFile` only if an ADR shows it is needed, and then **justify disabling process isolation** in the ADR — otherwise prefer `IInitializeWithStream` + resolving the path from `IInitializeWithItem`.
-- Must **delegate** to the pre-existing Autodesk handler (if any): see "Coexistence" below.
+- Writable unless the path is a cloud placeholder. Do **not** treat `STGM_READ` as making our seven properties read-only (Details would list them but not accept edits).
+- `GetValue`: `VT_LPWSTR` for our PIDs 2–8; `VT_EMPTY` if unset.
+- `SetValue`: ≤256 chars, strip controls, stage; `Commit` sets `source=explorer`, `mask=FieldAll`, `modifiedUtc=NowUtc`.
+- Delegate non-`RvtFileInfo.*` keys to the previous handler CLSID stored per extension under `HKLM\SOFTWARE\RvtFileInfo\OriginalHandlers` (and legacy `OriginalPropertyHandler` for `.rvt`).
 
-## Coexistence with Autodesk's `.rvt` registration
-1. Read the baseline from `docs/decisions/rvt-registry-baseline.txt`.
-2. If **no** property handler is registered for `.rvt` → register ours directly.
-3. If one **is** registered → register our handler as the primary and **aggregate**: our `IPropertyStore` forwards all non-`RvtFileInfo.*` keys (`GetCount/GetAt/GetValue`) to the original handler's `IPropertyStore` (CoCreateInstance the original CLSID, initialise with the same stream). Save the original CLSID in `HKLM\SOFTWARE\RvtFileInfo\OriginalPropertyHandler` for uninstall/restore.
-4. Never touch thumbnail/preview handler keys.
+## Coexistence
+1. Baseline: `docs/decisions/rvt-registry-baseline.txt`.
+2. Backup existing `PropertyHandlers\.ext` into `HKLM\SOFTWARE\RvtFileInfo` before overwrite (`Setup` `Backup`).
+3. Register our CLSID as the handler for **all** supported extensions.
+4. Never write thumbnail/preview `shellex` keys.
 
-## Registry entries (per-machine, written by the installer)
+## Registry (Explorer MSI / `RvtFileInfo.Setup.exe shell install`)
 ```
-HKCR\CLSID\{OUR-CLSID}\InprocServer32  (Default) = C:\Program Files\RvtFileInfo\RvtFileInfo.ShellHandler.dll ; ThreadingModel = Both
-HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\PropertySystem\PropertyHandlers\.rvt  (Default) = {OUR-CLSID}
-HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Shell Extensions\Approved  {OUR-CLSID} = "RvtFileInfo Property Handler"
-HKCR\.rvt\ (or its ProgID)\ FullDetails / PreviewDetails / InfoTip = prop:...;RvtFileInfo.Discipline;...  (append, don't replace)
+HKCR\CLSID\{C4A91E72-5D38-4F0B-9E16-2B7A6C8D4E50}\InprocServer32
+  (Default) = %ProgramFiles%\RvtFileInfo\RvtFileInfo.ShellHandler.dll
+  ThreadingModel = Both
+HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\PropertySystem\PropertyHandlers\.rvt|.rfa|.dwg|.nwd|.nwf|.nwc|.pdf
+  (Default) = {C4A91E72-5D38-4F0B-9E16-2B7A6C8D4E50}
+HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Shell Extensions\Approved
+  {C4A91E72-…} = RvtFileInfo Property Handler
 ```
-Verify each key name against Microsoft docs ("Registering and Distributing a Property Handler"), and for Windows Search ("Developing Property Handlers for Windows Search": `HKCR\.rvt\PersistentHandler`, only if indexing is required — document the decision).
 
-## Property schema (`RvtFileInfo.propdesc`)
-One `<propertyDescription>` per property, for example:
-```xml
-<?xml version="1.0" encoding="utf-8"?>
-<schema xmlns="http://schemas.microsoft.com/windows/2006/propertydescription" schemaVersion="1.0">
-  <propertyDescriptionList publisher="RvtFileInfo" product="RvtFileInfo">
-    <propertyDescription name="RvtFileInfo.Discipline" formatID="{NEW-GUID}" propID="2">
-      <description>Discipline of the Revit file</description>
-      <searchInfo inInvertedIndex="true" isColumn="true" isColumnSparse="false" columnIndexType="OnDisk" mnemonics="discipline"/>
-      <typeInfo type="String" multipleValues="false" isInnate="false" isViewable="true" isQueryable="true" canBePurged="false"/>
-      <labelInfo label="Discipline" invitationText="Add Discipline" hideLabel="false"/>
-      <displayInfo defaultColumnWidth="16" displayType="String" alignment="Left" relativeDescriptionType="General">
-        <editControl><control>TextBox</control></editControl>   <!-- verify exact schema for edit control -->
-        <stringFormat formatAs="General"/>
-        <drawControl><control>Default</control></drawControl>
-      </displayInfo>
-      <typeInfo/> <!-- agent: fix to the valid schema order/elements per MS docs -->
-    </propertyDescription>
-    <!-- repeat for propID 3..8: Location, Originator, SubDiscipline ("Sub Discipline"), DocumentType ("Document Type"), Program, SubProgram ("Sub Program") -->
-  </propertyDescriptionList>
-</schema>
-```
-**The snippet is illustrative.** Validate the final `.propdesc` with `PSRegisterPropertySchema` on a test VM and with Microsoft's schema; remove placeholder/duplicate elements. Requirements: `canGroupBy`, `canStackBy`, sortable, `isViewable=true`, `isInnate=false`, `searchInfo isColumn=true`.
+**Details UI:** append `RvtFileInfo.FileInfo;RvtFileInfo.Discipline;…;RvtFileInfo.SubProgram` to `FullDetails`, `PreviewDetails`, and `InfoTip` on:
+- `HKCR\.ext`
+- `HKCR\SystemFileAssociations\.ext`
+- every ProgID (`(Default)`, `OpenWithProgids`, `CurVer`)
 
-## Registration helpers
-- `RegisterSchema.exe` (or MSI custom action): calls `PSRegisterPropertySchema(path)`, then `PSRefreshPropertySchema()`. Uninstall: `PSUnregisterPropertySchema(path)`.
-- Both elevated; return meaningful HRESULTs to the MSI log.
+Without ProgID `FullDetails`, Explorer lists the names but they are not editable. For `.nwd` `.nwf` `.nwc` Setup may create ProgID `RvtFileInfo.nwd` (etc.) if none exists.
 
-## Performance & stability checklist
-- No heap allocation proportional to file size; use `IStream::Seek/Read` for header, DIFAT/FAT chain walking, and the single target stream.
-- Hard limits: ≤ 1 MB read for directory, ≤ 64 KB for our stream. Time limit via cancel flag.
-- Catch all C++ exceptions at COM boundary; no `abort()`.
-- Add `DllCanUnloadNow`, `DllGetClassObject`, `DllRegisterServer` (registry only; schema is done by installer).
-- Build with `/guard:cf`, `/GS`, `/sdl`, signed if a certificate is available.
+Do not register PersistentHandler unless documented.
+
+## Property schema (`src/ShellHandler/RvtFileInfo.propdesc`)
+Shipped file is the source of truth. Publisher/product `RvtFileInfo`. `formatID` is the FMTID above.
+
+- Group: `RvtFileInfo.FileInfo` PID 100, `isGroup="true"` `isInnate="true"` label **File Info**.
+- Seven properties: `searchInfo isColumn="true" columnIndexType="OnDisk"`; `typeInfo isInnate="false" isViewable="true" isQueryable="true" groupingRange="Discrete"`; `labelInfo` display names with spaces; `editControl control="Text"`.
+- No `<description>` node (schema rejected it). No `canBePurged`.
+
+Setup: `PSRegisterPropertySchema` then `PSRefreshPropertySchema`. Uninstall: `PSUnregisterPropertySchema`.
+
+## Performance
+Do not slurp the host file. S1 hashes other streams on **write** only. S4 hashes the host prefix on write. Read: CFB directory + `RvtFileInfo` or last 16 bytes + small CFB.
+
+COM exports: `DllCanUnloadNow`, `DllGetClassObject`. Registration of COM/schema is Setup.exe, not `DllRegisterServer` as the install path.
 
 ## Done when
-- `rvtinfo.exe set file.rvt Discipline=ARC` → Explorer shows the value in the Discipline column after Explorer restart.
-- Editing Discipline in the Details pane writes the value and `rvtinfo.exe get` returns it.
-- All non-`RvtFileInfo` properties previously shown for `.rvt` still show (compare before/after dump).
+`rvtinfo set` / Details edit round-trip for `.rvt` and for a dummy `.dwg`/`.pdf` whose leading bytes stay `AC10…` / `%PDF`. Copy of the DWG still `get`s values without ADS.

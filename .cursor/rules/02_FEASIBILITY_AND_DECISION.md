@@ -1,55 +1,43 @@
-# 02 — Phase 0: Feasibility Spike & Decision (Track A vs Track B)
+# 02 — Track decision (locked)
 
-**Goal:** decide, with evidence, whether the extension can work **without a Revit add-in**.
-Write results to `docs/decisions/ADR-001-track-decision.md`.
+Phase 0 is done. Do not re-run the spike as a prerequisite for shipping changes. Results: `docs/decisions/ADR-001-track-decision.md`. Registry dump: `docs/decisions/rvt-registry-baseline.txt`.
 
-## Why this needs a spike
-Explorer can only show what a property handler can read from the file (or from something attached to it). Revit rewrites the whole `.rvt` on Save. If Revit drops our data on save, a no-add-in solution loses values every time the user saves — which is unacceptable. We must **measure**, not assume.
+## Decision
+**Track B.** Mandatory Revit gates G2, G3, G4, G5, and G8 were UNTESTED (Revit 2027 was already running and was not closed; 2025 has no `Revit.exe`; 2026 is not installed). UNTESTED counts as fail.
 
-## Storage candidates to test (in order of preference)
-| ID | Candidate | Pros | Cons |
-|----|-----------|------|------|
-| S1 | **Extra stream inside the CFB** (e.g. `RvtFileInfo`) | Travels with the file (copy, zip, cloud) | Revit may drop it on save; external write into a proprietary file must be safe |
-| S2 | **NTFS Alternate Data Stream** `file.rvt:RvtFileInfo` | Never touches `.rvt` bytes | Lost on zip/email/cloud/non-NTFS; may be lost if Revit replaces the file on save |
-| S3 | **Sidecar** `file.rvt.fileinfo.json` | Simple, visible | Easily separated from file; clutter |
+Whether Revit drops an unknown `RvtFileInfo` stream on Save was **not measured**. Track B does not depend on that: the add-in stores values on Project Information and writes the file store after Save, Save As, and Sync with Central.
 
-## Experiments (run on COPIES of real `.rvt` files; if no Revit is installed, mark "UNTESTED" = FAIL)
-For each candidate S1–S3:
+## Stores
 
-| Gate | Test | Pass condition |
-|------|------|----------------|
-| G1 | Write 7 values with the prototype writer; read back with a separate process | Exact round-trip, incl. Unicode |
-| G2 | Open the file in Revit 2025/2026/2027 (whichever installed) — no warnings, no "recover" dialog | Opens normally |
-| G3 | In Revit: **Save** (workshared local & non-workshared) | Values still present afterwards |
-| G4 | In Revit: **Save As** to a new file name | Values present on the **new** file |
-| G5 | In Revit: **Synchronize with Central** (local file) | Values still present on local file |
-| G6 | Copy to another folder, rename, zip/unzip, copy via OneDrive folder | Present (S1 must pass; S2/S3 documented as non-portable) |
-| G7 | Explorer edit (writable handler) while Revit has the file **open** | Graceful read-only failure; no corruption |
-| G8 | Existing Autodesk thumbnail / preview still works | Yes |
+| ID | What | Shipping write | Shipping read |
+|----|------|----------------|---------------|
+| **S1** | Root CFB stream `RvtFileInfo` | Yes, when file magic is CFB (`.rvt` `.rfa`) | First if CFB |
+| **S4** | Appended OLE CFB + footer `RFICFB01` after host bytes | Yes, when not CFB (`.dwg` `.nwd` `.nwf` `.nwc` `.pdf`) | After S1 miss / for non-CFB |
+| **S2** | NTFS ADS `file:RvtFileInfo` | No (legacy). Deleted after a successful S4 write | After S4 miss |
+| **S3** | Sidecar `file.fileinfo.json` | No (legacy). Deleted after a successful S4 write | After S2 miss |
 
-Mandatory gates for **Track A**: **G1, G2, G3, G4, G5, G8**. G6 is mandatory for S1 if portability is a goal in FR5; otherwise document.
+S2/S3 remain in `Store.Core` (`ReadAds`/`WriteAds`/`ReadSidecar`/`WriteSidecar`) for tests and old files. `WriteFile` does not use them for new writes.
 
-## Decision tree
-```
-Any candidate passes all mandatory gates?
- ├─ YES → Track A (no add-in). Use the passing candidate as the primary store.
- │         Still ship the shell handler + installer. Do NOT build the add-in.
- └─ NO / UNTESTED → Track B.
-           Keep the shell handler + store abstraction (file 04).
-           Build Revit add-in 2025/2026/2027 (file 05) that holds the truth in the model
-           (Project Information parameters) and re-writes the file store after each save/sync/save-as.
-```
+## S4 rules (do not violate)
+- Do **not** call `StgOpenStorage` on the whole DWG/PDF/NWD — those are not compound files.
+- Do **not** wrap the host as a leading OLE package (would change the first 8 bytes).
+- Host prefix (bytes before the trailer) must be byte-identical after write (SHA-256).
+- Footer (little-endian, packed 16 bytes): `uint32 cfbSize`, `uint32 reserved=0`, magic 8 bytes `'R','F','I','C','F','B','0','1'`. CFB blob size 512–65536. CFB at `hostSize` must start with `D0 CF 11 E0 …`.
+- Rewrite strips a previous trailer, then appends a new CFB + footer (host size stays stable).
 
-## Notes the agent should check and record
-- Does Revit save **in place** or write-new-then-replace? (Check file ID / creation time; ADS and sidecar behaviour depends on it.)
-- Does Revit preserve **unknown CFB streams** on save? (Expected: probably not; confirm.)
-- Does `DocumentSaved` / `DocumentSavedAs` / `DocumentSynchronizedWithCentral` in the Revit API fire after file handles are released so the file can be updated externally? (Only if Track B; test in the add-in spike.)
-- Is there an existing Autodesk property handler or persistent handler on `.rvt`? Dump:
-  `HKCR\.rvt`, `HKCR\<ProgID>`, `HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\PropertySystem\PropertyHandlers\.rvt`, `HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\...\ThumbnailHandler` (via `shellex`). Save to `docs/decisions/rvt-registry-baseline.txt`.
+## Gates (historical; ADR-001)
+| Gate | S1 | S2 | S3 |
+|------|----|----|-----|
+| G1 Unicode | PASS | PASS | PASS |
+| G2 Open in Revit | UNTESTED | UNTESTED | UNTESTED |
+| G3 Save | UNTESTED | UNTESTED | UNTESTED |
+| G4 Save As | UNTESTED | UNTESTED | UNTESTED |
+| G5 Sync | UNTESTED | UNTESTED | UNTESTED |
+| G6 Copy/rename/zip | PASS (incl. zip for S1) | NTFS copy yes; zip drops | Sidecar separate |
+| G7 Edit while Revit open | Store: sharing violation | n/a | n/a |
+| G8 Thumbnail | Installer does not write thumbnail shellex | n/a | n/a |
 
-## Expected outcome (hypothesis, to be confirmed)
-S1/S2/S3 will probably **fail G3–G5** because Revit rewrites the file → **Track B is likely**. Even so, run the spike (or record "UNTESTED → Track B" with reason). Track B reuses 100% of Track A's shell handler, schema and installer, so no work is wasted.
+S4 G6 (copy of dummy DWG/PDF) is covered by `Store.Tests` (`TestNonCompoundWrite`). Zip of real DWG/PDF with trailer: not re-run as a Revit gate.
 
-## Deliverable of Phase 0
-- `docs/decisions/ADR-001-track-decision.md` containing: environment (Windows build, Revit versions), results table G1–G8 per candidate, chosen primary store, chosen Track, and rationale.
-- Prototype code under `spike/` (throwaway, not shipped).
+## Baseline
+`.rvt` had **no** property handler and **no** PersistentHandler. Thumbnail CLSID `{2E559A13-E91E-4DEB-8996-3B594FC11AC4}` (`Revit.Thumbnail20.dll`) must remain. Do not register `HKCR\.rvt\PersistentHandler` unless a later ADR says so (Search columns work without it).

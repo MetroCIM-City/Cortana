@@ -54,11 +54,11 @@ std::wstring NowUtc();
 Status Encode(const FileInfo& info, std::string& utf8);
 Status Decode(const std::string& utf8, FileInfo& info);
 
-// Primary store: CFB stream "RvtFileInfo". Safe temp-copy + transacted commit + ReplaceFileW.
+// Primary store: CFB stream "RvtFileInfo" for OLE files; appended OLE trailer for DWG/NWD/NWF/NWC/PDF.
 Status ReadFile(const std::wstring& path, FileInfo& info, bool& found);
 Status WriteFile(const std::wstring& path, const FileInfo& info);
 
-// Alternate backends. Tested, not enabled for shipping writes (see ADR-001).
+// Alternate backends. Used when a file is not CFB and has no trailer (legacy ADS/sidecar).
 Status ReadAds(const std::wstring& path, FileInfo& info, bool& found);
 Status WriteAds(const std::wstring& path, const FileInfo& info);
 Status ReadSidecar(const std::wstring& path, FileInfo& info, bool& found);

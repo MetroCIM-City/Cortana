@@ -63,7 +63,7 @@ The **Custom** tab (Checked By, Client, Typist, …) is the old OLE list. These 
 | Files | Store |
 | --- | --- |
 | `.rvt` `.rfa` | `RvtFileInfo` stream inside the compound file. Survives copy, rename, and zip. |
-| `.dwg` `.nwd` `.nwf` `.nwc` `.pdf` | NTFS alternate data stream `filename.ext:RvtFileInfo`. If ADS cannot be written, sidecar `filename.ext.fileinfo.json`. The original file bytes are not rewritten. Zip / email copies drop ADS. |
+| `.dwg` `.nwd` `.nwf` `.nwc` `.pdf` | Same `RvtFileInfo` OLE stream, stored in a small compound-file trailer **after** the original bytes. The host format (DWG / Navisworks / PDF header) is unchanged, so AutoCAD, Navisworks, and PDF readers still open the file. Copy, USB, zip, and email keep the values. Native Save in those apps can drop the trailer; write Details again after save. |
 
 Cloud placeholders (OneDrive files not on disk) are read-only.
 

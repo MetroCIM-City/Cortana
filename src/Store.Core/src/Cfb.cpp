@@ -10,6 +10,7 @@
 #include <bcrypt.h>
 #include <ole2.h>
 
+#include <array>
 #include <atomic>
 #include <map>
 #include <mutex>
@@ -117,6 +118,78 @@ private:
     long refs_ = 1;
     std::mutex mutex_;
 };
+
+class VectorLockBytes : public ILockBytes {
+public:
+    explicit VectorLockBytes(std::vector<unsigned char> data) : data_(std::move(data)) {}
+
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void** object) override {
+        if (!object) return E_POINTER;
+        if (riid == IID_IUnknown || riid == IID_ILockBytes) {
+            *object = static_cast<ILockBytes*>(this);
+            AddRef();
+            return S_OK;
+        }
+        *object = nullptr;
+        return E_NOINTERFACE;
+    }
+
+    ULONG STDMETHODCALLTYPE AddRef() override { return static_cast<ULONG>(InterlockedIncrement(&refs_)); }
+
+    ULONG STDMETHODCALLTYPE Release() override {
+        const ULONG count = static_cast<ULONG>(InterlockedDecrement(&refs_));
+        if (count == 0) delete this;
+        return count;
+    }
+
+    HRESULT STDMETHODCALLTYPE ReadAt(ULARGE_INTEGER offset, void* buffer, ULONG count, ULONG* read) override {
+        if (read) *read = 0;
+        if (!buffer && count) return STG_E_INVALIDPOINTER;
+        if (offset.QuadPart > data_.size()) return S_OK;
+        const size_t available = data_.size() - static_cast<size_t>(offset.QuadPart);
+        const ULONG copy = static_cast<ULONG>(available < count ? available : count);
+        if (copy) memcpy(buffer, data_.data() + static_cast<size_t>(offset.QuadPart), copy);
+        if (read) *read = copy;
+        return copy < count ? S_FALSE : S_OK;
+    }
+
+    HRESULT STDMETHODCALLTYPE WriteAt(ULARGE_INTEGER, const void*, ULONG, ULONG*) override { return STG_E_ACCESSDENIED; }
+
+    HRESULT STDMETHODCALLTYPE Flush() override { return S_OK; }
+
+    HRESULT STDMETHODCALLTYPE SetSize(ULARGE_INTEGER) override { return STG_E_ACCESSDENIED; }
+
+    HRESULT STDMETHODCALLTYPE LockRegion(ULARGE_INTEGER, ULARGE_INTEGER, DWORD) override { return S_OK; }
+
+    HRESULT STDMETHODCALLTYPE UnlockRegion(ULARGE_INTEGER, ULARGE_INTEGER, DWORD) override { return S_OK; }
+
+    HRESULT STDMETHODCALLTYPE Stat(STATSTG* stat, DWORD flags) override {
+        if (!stat) return E_POINTER;
+        ZeroMemory(stat, sizeof(*stat));
+        stat->type = STGTY_LOCKBYTES;
+        stat->cbSize.QuadPart = data_.size();
+        (void)flags;
+        return S_OK;
+    }
+
+private:
+    ~VectorLockBytes() = default;
+    std::vector<unsigned char> data_;
+    long refs_ = 1;
+};
+
+#pragma pack(push, 1)
+struct TrailerFooter {
+    uint32_t cfbSize = 0;
+    uint32_t reserved = 0;
+    unsigned char magic[8]{};
+};
+#pragma pack(pop)
+
+constexpr unsigned char kCfbMagic[8] = {0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1};
+constexpr unsigned char kTrailerMagic[8] = {'R', 'F', 'I', 'C', 'F', 'B', '0', '1'};
+constexpr uint32_t kMaxTrailerCfb = 65536;
+constexpr uint32_t kMinTrailerCfb = 512;
 
 Status Fail(long hr, const std::wstring& message) {
     g_lastError = message;
@@ -295,6 +368,175 @@ Status WriteStorage(IStorage* storage, const FileInfo& info) {
     return Status{S_OK, {}};
 }
 
+bool TrailerLayout(uint64_t fileSize, const TrailerFooter& footer, uint64_t& hostSize) {
+    if (footer.reserved != 0) return false;
+    if (memcmp(footer.magic, kTrailerMagic, sizeof(kTrailerMagic)) != 0) return false;
+    if (footer.cfbSize < kMinTrailerCfb || footer.cfbSize > kMaxTrailerCfb) return false;
+    if (fileSize < static_cast<uint64_t>(footer.cfbSize) + sizeof(TrailerFooter)) return false;
+    hostSize = fileSize - footer.cfbSize - sizeof(TrailerFooter);
+    return true;
+}
+
+Status ReadStorageFromCfb(const std::vector<unsigned char>& cfb, FileInfo& info, bool& found) {
+    found = false;
+    if (cfb.size() < 8 || memcmp(cfb.data(), kCfbMagic, sizeof(kCfbMagic)) != 0) {
+        return Status{S_OK, {}};
+    }
+    ComPtr<ILockBytes> bytes(new VectorLockBytes(cfb));
+    ComPtr<IStorage> storage;
+    const HRESULT hr =
+        StgOpenStorageOnILockBytes(bytes.Get(), nullptr, STGM_READ | STGM_SHARE_EXCLUSIVE, nullptr, 0, storage.Put());
+    if (FAILED(hr)) return Status{S_OK, {}};
+    return ReadStorage(storage.Get(), info, found);
+}
+
+Status BuildCfbBlob(const FileInfo& info, std::vector<unsigned char>& blob) {
+    blob.clear();
+    ComPtr<ILockBytes> bytes;
+    HRESULT hr = CreateILockBytesOnHGlobal(nullptr, TRUE, bytes.Put());
+    if (FAILED(hr)) return Fail(hr, L"could not create trailer storage");
+    ComPtr<IStorage> storage;
+    hr = StgCreateDocfileOnILockBytes(bytes.Get(), STGM_CREATE | STGM_READWRITE | STGM_SHARE_EXCLUSIVE, 0, storage.Put());
+    if (FAILED(hr)) return Fail(hr, L"could not create trailer compound file");
+    Status written = WriteStorage(storage.Get(), info);
+    if (!Ok(written)) return written;
+    hr = storage->Commit(STGC_DEFAULT);
+    if (FAILED(hr)) return Fail(hr, L"trailer compound file commit failed");
+    storage.Reset();
+    STATSTG stat{};
+    hr = bytes->Stat(&stat, STATFLAG_NONAME);
+    if (FAILED(hr) || stat.cbSize.QuadPart < kMinTrailerCfb || stat.cbSize.QuadPart > kMaxTrailerCfb) {
+        return Fail(E_FAIL, L"trailer compound file is an unexpected size");
+    }
+    blob.resize(static_cast<size_t>(stat.cbSize.QuadPart));
+    ULARGE_INTEGER offset{};
+    ULONG read = 0;
+    hr = bytes->ReadAt(offset, blob.data(), static_cast<ULONG>(blob.size()), &read);
+    if (FAILED(hr) || read != blob.size()) return Fail(E_FAIL, L"could not read trailer compound file");
+    return Status{S_OK, {}};
+}
+
+Status ReadFooter(IStream* stream, uint64_t fileSize, TrailerFooter& footer, uint64_t& hostSize) {
+    hostSize = fileSize;
+    if (fileSize < sizeof(TrailerFooter) + kMinTrailerCfb) return Status{S_OK, {}};
+    LARGE_INTEGER seek{};
+    seek.QuadPart = static_cast<LONGLONG>(fileSize - sizeof(TrailerFooter));
+    HRESULT hr = stream->Seek(seek, STREAM_SEEK_SET, nullptr);
+    if (FAILED(hr)) return Fail(hr, L"could not seek to trailer");
+    ULONG read = 0;
+    hr = stream->Read(&footer, sizeof(footer), &read);
+    if (FAILED(hr) || read != sizeof(footer) || !TrailerLayout(fileSize, footer, hostSize)) {
+        hostSize = fileSize;
+        footer = TrailerFooter{};
+        return Status{S_OK, {}};
+    }
+    seek.QuadPart = static_cast<LONGLONG>(hostSize);
+    hr = stream->Seek(seek, STREAM_SEEK_SET, nullptr);
+    if (FAILED(hr)) return Fail(hr, L"could not seek to trailer OLE");
+    unsigned char magic[8]{};
+    read = 0;
+    hr = stream->Read(magic, sizeof(magic), &read);
+    if (FAILED(hr) || read != sizeof(magic) || memcmp(magic, kCfbMagic, sizeof(magic)) != 0) {
+        hostSize = fileSize;
+        footer = TrailerFooter{};
+    }
+    return Status{S_OK, {}};
+}
+
+Status ReadTrailerStream(IStream* stream, FileInfo& info, bool& found) {
+    found = false;
+    STATSTG stat{};
+    HRESULT hr = stream->Stat(&stat, STATFLAG_NONAME);
+    if (FAILED(hr)) return Fail(hr, L"could not size stream");
+    TrailerFooter footer;
+    uint64_t hostSize = 0;
+    Status parsed = ReadFooter(stream, stat.cbSize.QuadPart, footer, hostSize);
+    if (!Ok(parsed)) return parsed;
+    if (footer.cfbSize == 0) return Status{S_OK, {}};
+    std::vector<unsigned char> cfb(footer.cfbSize);
+    LARGE_INTEGER seek{};
+    seek.QuadPart = static_cast<LONGLONG>(hostSize);
+    hr = stream->Seek(seek, STREAM_SEEK_SET, nullptr);
+    if (FAILED(hr)) return Fail(hr, L"could not seek to trailer OLE");
+    ULONG read = 0;
+    hr = stream->Read(cfb.data(), footer.cfbSize, &read);
+    if (FAILED(hr) || read != footer.cfbSize) return Fail(E_FAIL, L"could not read trailer OLE");
+    return ReadStorageFromCfb(cfb, info, found);
+}
+
+bool HashPrefix(HANDLE file, uint64_t length, Digest& digest) {
+    LARGE_INTEGER zero{};
+    if (!SetFilePointerEx(file, zero, nullptr, FILE_BEGIN)) return false;
+    BCRYPT_ALG_HANDLE algorithm = nullptr;
+    BCRYPT_HASH_HANDLE hash = nullptr;
+    if (BCryptOpenAlgorithmProvider(&algorithm, BCRYPT_SHA256_ALGORITHM, nullptr, 0) < 0) return false;
+    DWORD objectLength = 0;
+    DWORD ignored = 0;
+    if (BCryptGetProperty(algorithm, BCRYPT_OBJECT_LENGTH, reinterpret_cast<PUCHAR>(&objectLength), sizeof(objectLength),
+                          &ignored, 0) < 0) {
+        BCryptCloseAlgorithmProvider(algorithm, 0);
+        return false;
+    }
+    std::vector<UCHAR> object(objectLength);
+    if (BCryptCreateHash(algorithm, &hash, object.data(), objectLength, nullptr, 0, 0) < 0) {
+        BCryptCloseAlgorithmProvider(algorithm, 0);
+        return false;
+    }
+    std::vector<unsigned char> buffer(64 * 1024);
+    uint64_t remaining = length;
+    while (remaining > 0) {
+        const DWORD chunk = remaining > buffer.size() ? static_cast<DWORD>(buffer.size()) : static_cast<DWORD>(remaining);
+        DWORD read = 0;
+        if (!::ReadFile(file, buffer.data(), chunk, &read, nullptr) || read != chunk) {
+            BCryptDestroyHash(hash);
+            BCryptCloseAlgorithmProvider(algorithm, 0);
+            return false;
+        }
+        if (BCryptHashData(hash, buffer.data(), read, 0) < 0) {
+            BCryptDestroyHash(hash);
+            BCryptCloseAlgorithmProvider(algorithm, 0);
+            return false;
+        }
+        remaining -= read;
+    }
+    digest.size = length;
+    const bool ok = BCryptFinishHash(hash, digest.hash.data(), static_cast<ULONG>(digest.hash.size()), 0) >= 0;
+    BCryptDestroyHash(hash);
+    BCryptCloseAlgorithmProvider(algorithm, 0);
+    return ok;
+}
+
+Status WriteTrailerStream(IStream* stream, const FileInfo& info) {
+    STATSTG stat{};
+    HRESULT hr = stream->Stat(&stat, STATFLAG_NONAME);
+    if (FAILED(hr)) return Fail(hr, L"could not size stream");
+    TrailerFooter existing;
+    uint64_t hostSize = 0;
+    Status parsed = ReadFooter(stream, stat.cbSize.QuadPart, existing, hostSize);
+    if (!Ok(parsed)) return parsed;
+    std::vector<unsigned char> blob;
+    Status built = BuildCfbBlob(info, blob);
+    if (!Ok(built)) return built;
+    ULARGE_INTEGER newSize{};
+    newSize.QuadPart = hostSize + blob.size() + sizeof(TrailerFooter);
+    hr = stream->SetSize(newSize);
+    if (FAILED(hr)) return Fail(hr, L"could not resize stream for trailer");
+    LARGE_INTEGER seek{};
+    seek.QuadPart = static_cast<LONGLONG>(hostSize);
+    hr = stream->Seek(seek, STREAM_SEEK_SET, nullptr);
+    if (FAILED(hr)) return Fail(hr, L"could not seek to write trailer");
+    ULONG written = 0;
+    hr = stream->Write(blob.data(), static_cast<ULONG>(blob.size()), &written);
+    if (FAILED(hr) || written != blob.size()) return Fail(E_FAIL, L"could not write trailer OLE");
+    TrailerFooter footer;
+    footer.cfbSize = static_cast<uint32_t>(blob.size());
+    memcpy(footer.magic, kTrailerMagic, sizeof(kTrailerMagic));
+    written = 0;
+    hr = stream->Write(&footer, sizeof(footer), &written);
+    if (FAILED(hr) || written != sizeof(footer)) return Fail(E_FAIL, L"could not write trailer footer");
+    return Status{S_OK, {}};
+}
+
 }  // namespace
 
 bool IsCompoundFile(const std::wstring& path) {
@@ -305,8 +547,7 @@ bool IsCompoundFile(const std::wstring& path) {
     DWORD read = 0;
     const BOOL ok = ::ReadFile(file, magic, sizeof(magic), &read, nullptr);
     CloseHandle(file);
-    const unsigned char signature[8] = {0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1};
-    return ok && read == sizeof(magic) && memcmp(magic, signature, sizeof(magic)) == 0;
+    return ok && read == sizeof(magic) && memcmp(magic, kCfbMagic, sizeof(magic)) == 0;
 }
 
 namespace {
@@ -360,6 +601,152 @@ Status Merge(const std::wstring& path, const FileInfo& incoming, FileInfo& merge
     return Status{S_OK, {}};
 }
 
+Status ReadTrailerPath(const std::wstring& path, FileInfo& info, bool& found) {
+    found = false;
+    HANDLE file = CreateFileW(LongPath(path).c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                              nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE) return Fail(HRESULT_FROM_WIN32(GetLastError()), L"could not open the file");
+    LARGE_INTEGER size{};
+    if (!GetFileSizeEx(file, &size)) {
+        const DWORD error = GetLastError();
+        CloseHandle(file);
+        return Fail(HRESULT_FROM_WIN32(error), L"could not size the file");
+    }
+    if (size.QuadPart < static_cast<LONGLONG>(sizeof(TrailerFooter) + kMinTrailerCfb)) {
+        CloseHandle(file);
+        return Status{S_OK, {}};
+    }
+    LARGE_INTEGER seek{};
+    seek.QuadPart = -static_cast<LONGLONG>(sizeof(TrailerFooter));
+    TrailerFooter footer;
+    DWORD read = 0;
+    if (!SetFilePointerEx(file, seek, nullptr, FILE_END) ||
+        !::ReadFile(file, &footer, sizeof(footer), &read, nullptr) || read != sizeof(footer)) {
+        CloseHandle(file);
+        return Status{S_OK, {}};
+    }
+    uint64_t hostSize = 0;
+    if (!TrailerLayout(static_cast<uint64_t>(size.QuadPart), footer, hostSize)) {
+        CloseHandle(file);
+        return Status{S_OK, {}};
+    }
+    seek.QuadPart = static_cast<LONGLONG>(hostSize);
+    std::vector<unsigned char> cfb(footer.cfbSize);
+    if (!SetFilePointerEx(file, seek, nullptr, FILE_BEGIN) ||
+        !::ReadFile(file, cfb.data(), footer.cfbSize, &read, nullptr) || read != footer.cfbSize) {
+        CloseHandle(file);
+        return Status{S_OK, {}};
+    }
+    CloseHandle(file);
+    return ReadStorageFromCfb(cfb, info, found);
+}
+
+Status WriteTrailerFile(const std::wstring& path, const FileInfo& incoming) {
+    FileInfo merged;
+    Status mergedStatus = Merge(path, incoming, merged);
+    if (!Ok(mergedStatus)) return mergedStatus;
+
+    HANDLE original = CreateFileW(LongPath(path).c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                                  nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (original == INVALID_HANDLE_VALUE) {
+        return Fail(HRESULT_FROM_WIN32(GetLastError()), L"could not open the file");
+    }
+    LARGE_INTEGER size{};
+    if (!GetFileSizeEx(original, &size)) {
+        const DWORD error = GetLastError();
+        CloseHandle(original);
+        return Fail(HRESULT_FROM_WIN32(error), L"could not size the file");
+    }
+    TrailerFooter existing{};
+    uint64_t hostSize = static_cast<uint64_t>(size.QuadPart);
+    if (size.QuadPart >= static_cast<LONGLONG>(sizeof(TrailerFooter) + kMinTrailerCfb)) {
+        LARGE_INTEGER seek{};
+        seek.QuadPart = -static_cast<LONGLONG>(sizeof(TrailerFooter));
+        DWORD read = 0;
+        if (SetFilePointerEx(original, seek, nullptr, FILE_END) &&
+            ::ReadFile(original, &existing, sizeof(existing), &read, nullptr) && read == sizeof(existing)) {
+            uint64_t parsedHost = 0;
+            if (TrailerLayout(static_cast<uint64_t>(size.QuadPart), existing, parsedHost)) hostSize = parsedHost;
+        }
+    }
+    Digest before;
+    if (!HashPrefix(original, hostSize, before)) {
+        CloseHandle(original);
+        return Fail(E_FAIL, L"could not hash host bytes");
+    }
+    CloseHandle(original);
+
+    std::vector<unsigned char> blob;
+    Status built = BuildCfbBlob(merged, blob);
+    if (!Ok(built)) return built;
+
+    std::wstring temp = path + L".rfi.tmp";
+    for (int attempt = 0; attempt < 50 && GetFileAttributesW(temp.c_str()) != INVALID_FILE_ATTRIBUTES; ++attempt) {
+        temp = path + L".rfi" + std::to_wstring(attempt) + L".tmp";
+    }
+    const std::wstring tempLong = LongPath(temp);
+    if (!CopyFileW(LongPath(path).c_str(), tempLong.c_str(), FALSE)) {
+        return Fail(HRESULT_FROM_WIN32(GetLastError()), L"could not copy the file");
+    }
+    SetFileAttributesW(tempLong.c_str(), FILE_ATTRIBUTE_NORMAL);
+    auto cleanup = [&]() { DeleteFileW(tempLong.c_str()); };
+
+    HANDLE tempFile = CreateFileW(tempLong.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING,
+                                  FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (tempFile == INVALID_HANDLE_VALUE) {
+        cleanup();
+        return Fail(HRESULT_FROM_WIN32(GetLastError()), L"could not open the temporary file");
+    }
+    LARGE_INTEGER host{};
+    host.QuadPart = static_cast<LONGLONG>(hostSize);
+    if (!SetFilePointerEx(tempFile, host, nullptr, FILE_BEGIN) || !SetEndOfFile(tempFile)) {
+        const DWORD error = GetLastError();
+        CloseHandle(tempFile);
+        cleanup();
+        return Fail(HRESULT_FROM_WIN32(error), L"could not strip the previous trailer");
+    }
+    DWORD written = 0;
+    if (!::WriteFile(tempFile, blob.data(), static_cast<DWORD>(blob.size()), &written, nullptr) || written != blob.size()) {
+        CloseHandle(tempFile);
+        cleanup();
+        return Fail(E_FAIL, L"could not write trailer OLE");
+    }
+    TrailerFooter footer;
+    footer.cfbSize = static_cast<uint32_t>(blob.size());
+    memcpy(footer.magic, kTrailerMagic, sizeof(kTrailerMagic));
+    written = 0;
+    if (!::WriteFile(tempFile, &footer, sizeof(footer), &written, nullptr) || written != sizeof(footer)) {
+        CloseHandle(tempFile);
+        cleanup();
+        return Fail(E_FAIL, L"could not write trailer footer");
+    }
+    Digest after;
+    if (!HashPrefix(tempFile, hostSize, after) || after.size != before.size || after.hash != before.hash) {
+        CloseHandle(tempFile);
+        cleanup();
+        return Fail(E_FAIL, L"host bytes changed");
+    }
+    CloseHandle(tempFile);
+
+    if (g_failPoint.load() == 1) {
+        cleanup();
+        return Fail(E_FAIL, L"failpoint before replace");
+    }
+
+    const bool backups = KeepBackups();
+    const std::wstring backup = path + L".bak";
+    if (!ReplaceFileW(LongPath(path).c_str(), tempLong.c_str(), backups ? LongPath(backup).c_str() : nullptr,
+                      REPLACEFILE_WRITE_THROUGH, nullptr, nullptr)) {
+        const DWORD error = GetLastError();
+        cleanup();
+        return Fail(HRESULT_FROM_WIN32(error), L"ReplaceFile failed");
+    }
+    DeleteFileW((path + L":RvtFileInfo").c_str());
+    DeleteFileW((path + L".fileinfo.json").c_str());
+    g_lastError.clear();
+    return Status{S_OK, {}};
+}
+
 }  // namespace
 
 void SetFailPoint(int phase) { g_failPoint.store(phase); }
@@ -375,12 +762,13 @@ bool IsCloudPlaceholder(const std::wstring& path) {
 
 Status ReadStream(IStream* stream, FileInfo& info, bool& found) {
     if (!stream) return Fail(E_POINTER, L"stream is null");
+    found = false;
     ComPtr<ILockBytes> bytes(new StreamLockBytes(stream));
     ComPtr<IStorage> storage;
     const HRESULT hr = StgOpenStorageOnILockBytes(bytes.Get(), nullptr, STGM_READ | STGM_SHARE_EXCLUSIVE, nullptr, 0,
                                                   storage.Put());
-    if (FAILED(hr)) return Fail(hr, L"stream is not a readable compound file");
-    return ReadStorage(storage.Get(), info, found);
+    if (SUCCEEDED(hr)) return ReadStorage(storage.Get(), info, found);
+    return ReadTrailerStream(stream, info, found);
 }
 
 Status WriteStream(IStream* stream, const FileInfo& info) {
@@ -389,16 +777,20 @@ Status WriteStream(IStream* stream, const FileInfo& info) {
     ComPtr<IStorage> storage;
     HRESULT hr = StgOpenStorageOnILockBytes(
         bytes.Get(), nullptr, STGM_READWRITE | STGM_SHARE_EXCLUSIVE | STGM_TRANSACTED, nullptr, 0, storage.Put());
-    if (FAILED(hr)) return Fail(hr, L"could not open compound file for transacted write");
-    Status written = WriteStorage(storage.Get(), info);
-    if (!Ok(written)) {
-        storage->Revert();
-        return written;
+    if (SUCCEEDED(hr)) {
+        Status written = WriteStorage(storage.Get(), info);
+        if (!Ok(written)) {
+            storage->Revert();
+            return written;
+        }
+        hr = storage->Commit(STGC_DEFAULT);
+        if (FAILED(hr)) return Fail(hr, L"transacted commit failed");
+        bytes->Flush();
+        return Status{S_OK, {}};
     }
-    hr = storage->Commit(STGC_DEFAULT);
-    if (FAILED(hr)) return Fail(hr, L"transacted commit failed");
-    bytes->Flush();
-    return Status{S_OK, {}};
+    Status trailer = WriteTrailerStream(stream, info);
+    if (!Ok(trailer)) return trailer;
+    return Status{stream->Commit(STGC_DEFAULT), {}};
 }
 
 Status ReadAlternate(const std::wstring& path, FileInfo& info, bool& found) {
@@ -430,8 +822,12 @@ Status ReadFile(const std::wstring& path, FileInfo& info, bool& found) {
         if (FAILED(hr)) return Fail(hr, L"could not open compound file");
         Status status = ReadStorage(storage.Get(), info, found);
         if (!Ok(status) || found) return status;
+        Status trailer = ReadTrailerPath(path, info, found);
+        if (!Ok(trailer) || found) return trailer;
         return ReadAlternate(path, info, found);
     }
+    Status trailer = ReadTrailerPath(path, info, found);
+    if (!Ok(trailer) || found) return trailer;
     return ReadAlternate(path, info, found);
 }
 
@@ -439,7 +835,7 @@ Status WriteFile(const std::wstring& path, const FileInfo& incoming) {
     if (IsCloudPlaceholder(path)) return Fail(HRESULT_FROM_WIN32(ERROR_ACCESS_DENIED), L"cloud placeholder is read-only");
     Status probe = ProbeExclusive(path);
     if (!Ok(probe)) return probe;
-    if (!IsCompoundFile(path)) return WriteAlternate(path, incoming);
+    if (!IsCompoundFile(path)) return WriteTrailerFile(path, incoming);
 
     FileInfo merged;
     Status mergedStatus = Merge(path, incoming, merged);
@@ -539,20 +935,32 @@ Status WriteRaw(const std::wstring& path, const std::string& json) {
 
 Status ListStreams(const std::wstring& path, std::wstring& report) {
     report.clear();
-    if (!IsCompoundFile(path)) return Fail(STG_E_INVALIDHEADER, L"not a compound file");
-    ComPtr<IStorage> storage;
-    const HRESULT hr = StgOpenStorage(StoragePath(path).c_str(), nullptr, STGM_READ | STGM_SHARE_DENY_WRITE, nullptr, 0,
-                                      storage.Put());
-    if (FAILED(hr)) return Fail(hr, L"could not open compound file");
-    std::map<std::wstring, Digest> streams;
-    Status status = Enumerate(storage.Get(), L"", streams);
-    if (!Ok(status)) return status;
-    for (const auto& item : streams) {
-        report += item.first;
-        report += L"\t";
-        report += std::to_wstring(item.second.size);
-        report += L"\r\n";
+    auto append = [&](const std::map<std::wstring, Digest>& streams) {
+        for (const auto& item : streams) {
+            report += item.first;
+            report += L"\t";
+            report += std::to_wstring(item.second.size);
+            report += L"\r\n";
+        }
+    };
+    if (IsCompoundFile(path)) {
+        ComPtr<IStorage> storage;
+        const HRESULT hr = StgOpenStorage(StoragePath(path).c_str(), nullptr, STGM_READ | STGM_SHARE_DENY_WRITE, nullptr, 0,
+                                          storage.Put());
+        if (FAILED(hr)) return Fail(hr, L"could not open compound file");
+        std::map<std::wstring, Digest> streams;
+        Status status = Enumerate(storage.Get(), L"", streams);
+        if (!Ok(status)) return status;
+        append(streams);
+        return Status{S_OK, {}};
     }
+    FileInfo info;
+    bool found = false;
+    Status trailer = ReadTrailerPath(path, info, found);
+    if (!Ok(trailer)) return trailer;
+    if (!found) return Fail(STG_E_INVALIDHEADER, L"not a compound file");
+    report += kStreamName;
+    report += L"\ttrailer\r\n";
     return Status{S_OK, {}};
 }
 

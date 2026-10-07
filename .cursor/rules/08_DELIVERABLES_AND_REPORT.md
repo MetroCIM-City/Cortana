@@ -1,40 +1,40 @@
 # 08 — Deliverables & Final Report
 
 ## Deliverables
-1. Source repository in the layout from file 03 (only the Track-relevant projects; remove unused ones).
-2. `dist/RvtFileInfo-<version>-x64.msi` + `SHA256SUMS.txt`.
-3. `docs/decisions/ADR-001-track-decision.md` (+ any other ADRs) and `rvt-registry-baseline.txt`.
-4. `README.md` (user): install, silent install, using columns, editing values, uninstall, troubleshooting (Explorer restart, rebuild search index, "values missing after Revit save").
-5. `docs/SUPPORT.md`: log locations, how to dump registry state, how to run `rvtinfo`.
-6. Test results summary (`docs/TEST_REPORT.md`) with "Not verified" section.
-7. Known limitations list.
+1. Source in the layout from file 03.
+2. Three MSIs in `dist\` plus `SHA256SUMS.txt` (binaries git-ignored; build locally).
+3. `docs/decisions/ADR-001-track-decision.md` and `rvt-registry-baseline.txt`.
+4. `README.md`: three packages, silent properties, Details vs Custom, S1 vs S4, uninstall order, troubleshooting.
+5. `docs/SUPPORT.md`: logs, registry dump, `rvtinfo`, three installers.
+6. `docs/TEST_REPORT.md` with **Not verified**.
+7. Known limitations.
 
-## Definition of done
-- [ ] Phase 0 gates executed or explicitly marked UNTESTED with reason; Track decision recorded.
-- [ ] 7 properties visible in Explorer columns, Details pane, Properties > Details.
-- [ ] Editable where safe; locked-file behaviour graceful.
-- [ ] Existing `.rvt` Explorer behaviour unchanged (before/after property dump attached).
-- [ ] Track B: add-in built for 2025, 2026, 2027 with correct target frameworks; manifests install correctly.
-- [ ] Installer installs, repairs, upgrades, uninstalls cleanly (diff test).
-- [ ] All unit + integration tests pass; manual checklist results recorded.
-- [ ] No real client files in the repo; no secrets.
+## Definition of done (maintenance)
+- [ ] Do not regenerate committed GUIDs / UpgradeCodes / AddInId / parameter GUIDs.
+- [ ] Seven properties on Explorer Details for `.rvt` `.rfa` `.dwg` `.nwd` `.nwf` `.nwc` `.pdf`.
+- [ ] S4 trailer for non-CFB; S1 for CFB; no leading-OLE wrap of DWG/PDF/NWD.
+- [ ] Three MSIs remain separate.
+- [ ] Autodesk thumbnail shellex untouched.
+- [ ] Unit tests pass; unrun Explorer/Revit UI listed as Not verified.
+- [ ] No client files or secrets in git.
 
-## Final report format (print at the end of the run)
+## Build report format
 ```
-# RVT File Info — Build Report
-Track chosen: A | B   (reason in 1–2 lines)
-Gate results: G1..G8 table
-Components built: ...
-Revit versions: 2025 [built/tested], 2026 [...], 2027 [...]
-Installer: path, size, SHA256
-Tests: passed/failed counts
+# RvtFileInfo — Build Report
+Track: B (ADR-001, UNTESTED Revit gates)
+Stores: S1 CFB stream; S4 appended OLE trailer; S2/S3 read fallback
+Extensions: .rvt .rfa .dwg .nwd .nwf .nwc .pdf
+Installers: Explorer / RevitAddin / Manifests 1.2.0 x64 + SHA256
+Tests: Store.Tests / ShellHandler.Tests / Addin.Tests
 Not verified: ...
 Known limitations: ...
-Next steps / recommendations: ...
 ```
 
-## Likely limitations to state honestly
-- Values set outside Revit are only durable if Revit preserves them (Phase 0 result).
-- Cloud / zip portability depends on the chosen store (S1 portable; S2/S3 not).
-- Windows Search indexing of custom properties may need a re-index after install.
-- Revit 2027 API/target framework verified against the installed SDK at build time only.
+## Known limitations (keep honest)
+- Revit Save without the add-in loaded may drop S1 (G3 UNTESTED).
+- AutoCAD / Navisworks / Acrobat Save may drop the S4 trailer.
+- Details appear on another PC only if that PC has the Explorer MSI.
+- Cloud placeholders are read-only.
+- Windows Search may need a re-index.
+- `PSRegisterPropertySchema` needs elevation; tests may see `0x80070005`.
+- Revit 2025/2026/2027 in-process behaviour is Not verified unless a tester runs it.

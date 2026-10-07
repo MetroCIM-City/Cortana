@@ -8,34 +8,36 @@
 └──────────────┬────────────────┘        └───────────────┬────────────────────┘
                │ IPropertyStore                           │ writes on Save/SaveAs/Sync
 ┌──────────────▼────────────────┐   shared lib   ┌────────▼───────────────────┐
-│ RvtFileInfo.ShellHandler (C++)│◄──────────────►│ RvtFileInfo.Store (C++ core │
-│ property handler + schema     │  same format   │  + .NET wrapper/P-Invoke)   │
+│ RvtFileInfo.ShellHandler (C++)│◄──────────────►│ Store.Core + Store.Abi     │
+│ + RvtFileInfo.propdesc        │  same JSON     │ + Store.Net P/Invoke       │
 └──────────────┬────────────────┘                └────────┬───────────────────┘
-               └──────────────► file store (S1/S2/S3) ◄───┘   (+ model: ProjectInfo params, Track B)
+               └────────── file store S1 / S4 (S2/S3 read fallback) ─────────┘
 ```
 
-## Repository layout
+## Repository layout (this repo)
 ```
-rvt-fileinfo/
-  build.ps1                      # restore, build, test, package
-  docs/decisions/                # ADRs
-  spike/                         # Phase 0 throwaway code
-  src/
-    Store.Core/                  # C++ static lib: CFB read/write, ADS, sidecar, JSON codec
-    ShellHandler/                # C++ ATL COM DLL (x64): IPropertyStore, IInitializeWithStream, ...
-      RvtFileInfo.propdesc
-    Store.Net/                   # .NET wrapper over Store.Core (C ABI) — Track B + tools
-    RevitAddin/                  # Track B: multi-target 2025/2026/2027
-    EditorCli/                   # rvtinfo.exe: get/set/dump values (testing + support)
-    Installer/                   # WiX v5 project + custom actions
-  tests/
-    Store.Tests/  ShellHandler.Tests/  Addin.Tests/  Fixtures/
+build.ps1
+docs/decisions/                  ADR-001, rvt-registry-baseline.txt
+docs/SUPPORT.md  docs/TEST_REPORT.md
+spike/                           Phase 0 throwaway; not shipped
+src/
+  Store.Core/                    C++ static lib: Cfb.cpp (S1+S4), AltStores.cpp (S2/S3), Json.cpp
+  Store.Abi/                     C ABI → RvtFileInfo.Store.dll
+  Store.Net/                     net8 + net10 wrappers
+  ShellHandler/                  ATL COM DLL x64, RvtFileInfo.propdesc
+  RevitAddin/                    configs R25, R26, R27
+  EditorCli/                     rvtinfo.exe
+  Setup/                         RvtFileInfo.Setup.exe (shell | manifests)
+  Installer/                     Package.wxs, Package.Addin.wxs, Package.Manifests.wxs
+  Shared/Guids.h
+tests/  Store.Tests  ShellHandler.Tests  Addin.Tests  Fixtures/
 ```
 
 ## Property schema
-- Namespace: `RvtFileInfo`; one new **FMTID GUID** (generate once, commit; PIDs 2–8).
-- Property names `RvtFileInfo.Discipline`, … (see file 00). Type `String`. Display names exactly as requested (with spaces).
-- Registered system-wide with `PSRegisterPropertySchema` from a `.propdesc` installed under `%ProgramFiles%\RvtFileInfo\`.
+- Namespace `RvtFileInfo`. FMTID `{6F3C2A91-8B14-4D5E-A7C2-19E4B8D07F31}`. PIDs 2–8 + group 100.
+- Installed as `%ProgramFiles%\RvtFileInfo\RvtFileInfo.propdesc`.
+- Register with `PSRegisterPropertySchema` from Setup.exe (not a separate RegisterSchema.exe).
+- No `<description>` element. Do not set `canBePurged` on writable (`isInnate=false`) properties. Group-by is `groupingRange="Discrete"`. Edit control is `editControl control="Text"`.
 
 ## Stored payload (UTF-8 JSON, schema v1)
 ```json
@@ -47,27 +49,43 @@ rvt-fileinfo/
   "source": "explorer|revit|cli"
 }
 ```
-Rules: unknown keys preserved; max 256 chars/value; max payload 4 KB; trim control characters.
+Unknown keys preserved. Max 256 chars/value. Max payload 4 KB. Control characters stripped.
 
-## Store abstraction
+## Read / write tree (`ReadFile` / `WriteFile`)
 ```
-interface IFileInfoStore { Read(path|stream) -> FileInfo?; Write(path, FileInfo) -> HRESULT; Name }
+cloud placeholder → fail (read-only)
+Write: exclusive open or ERROR_SHARING_VIOLATION
+
+Read:
+  if CFB magic → S1 OpenStream("RvtFileInfo"); if missing → S4 trailer → S2 → S3
+  else → S4 trailer → S2 → S3
+
+Write:
+  if CFB magic → S1 temp copy, STGM_TRANSACTED, SameExceptPayload, ReplaceFileW
+  else → S4 temp copy, truncate to hostSize, append CFB+footer, host prefix hash, ReplaceFileW
+        then delete path:RvtFileInfo and path.fileinfo.json
 ```
-Implementations: `CfbStreamStore` (S1), `AdsStore` (S2), `SidecarStore` (S3). Only the backends chosen in ADR-001 ship enabled. **Read order:** primary → secondary → none. **Write:** primary only (plus secondary if configured).
 
-## Safe write rules (S1)
-1. Never write if the file is locked by another process (probe with exclusive open); return `HRESULT_FROM_WIN32(ERROR_SHARING_VIOLATION)`.
-2. Operate on a **temporary copy** in the same folder → modify only our stream via structured storage in transacted mode → verify CFB opens and all other streams' sizes/hashes unchanged → atomic replace (`ReplaceFileW`, preserving ACLs, timestamps adjusted only for modified).
-3. Preserve file attributes and OneDrive placeholder state (do not hydrate/dehydrate unexpectedly; if file is a cloud placeholder, fall back to the read-only state).
-4. Keep a rolling `.bak` only when `HKLM\SOFTWARE\RvtFileInfo\KeepBackups=1`.
+`IStream` path: `ReadStream` / `WriteStream` try whole-stream CFB first; if that fails, S4 on the stream.
 
-## Sync rules (Track B only)
-- **Model is the source of truth** for Revit users: seven shared parameters on **Project Information**.
-- `DocumentOpened`: if stored `modifiedUtc` (file store) is newer than model's `RvtFileInfo_ModifiedUtc` parameter → import into model (one transaction, named "Import file info"); else leave.
-- `DocumentSaved`, `DocumentSavedAs`, `DocumentSynchronizedWithCentral`: export model values → file store (using the Store library). Verify the file is writable at that moment (see ADR-001 notes).
-- Conflict: newest `modifiedUtc` wins; ties → model wins.
+## Safe write (S1)
+1. Exclusive probe; locked → `HRESULT_FROM_WIN32(ERROR_SHARING_VIOLATION)`.
+2. Temp `*.rfi.tmp` in the same folder → transacted structured storage → verify other streams' SHA-256 → `ReplaceFileW`.
+3. Cloud placeholders: no write.
+4. `.bak` only if `HKLM\SOFTWARE\RvtFileInfo\KeepBackups=1`.
+5. `StgOpenStorage` paths must **not** use the `\\?\` prefix (`StoragePath`).
 
-## Security & robustness
-- No elevation required at runtime; installer is the only admin step.
-- Property handler runs out-of-proc via the property host (`IInitializeWithStream`); do **not** set `DisableProcessIsolation`.
-- Fuzz the CFB reader (truncated, cyclic FAT, huge sizes) — must fail closed.
+## Safe write (S4)
+Same exclusive probe, temp copy, `ReplaceFileW`, failpoint `SetFailPoint(1)` before replace. Host bytes (everything before the trailer) hashed; mismatch aborts and deletes the temp file.
+
+## Sync rules (Track B)
+- Model is source of truth in Revit: shared parameters on Project Information.
+- `DocumentOpened`: if file `modifiedUtc` is newer than `RvtFileInfo_ModifiedUtc` → import in transaction `"Import file info"`.
+- `DocumentSaved` / `DocumentSavedAs` / `DocumentSynchronizedWithCentral`: export model → `WriteFile`. Retry via `ExternalEvent` + timer, max 3, then `TaskDialog` + `addin.log`.
+- Conflict: newer `modifiedUtc` wins; tie → model wins.
+- Ignore families, links, documents with no path.
+
+## Security
+- Runtime: no elevation. Installers: admin.
+- Handler: process isolation on (do **not** set `DisableProcessIsolation`).
+- Corrupt CFB (truncated magic, etc.): fail closed.

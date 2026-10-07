@@ -1,50 +1,78 @@
-# 06 — Windows 11 Installer
+# 06 — Windows 11 Installers (three MSIs)
 
-## Technology
-**WiX Toolset v5 (MSI)**, per-machine, x64, with a small .NET (or C++) custom-action helper. Alternative allowed only if documented in an ADR: Inno Setup. No MSIX (shell extension + HKLM schema registration is not a good fit).
+WiX v5, per-machine, x64. Custom actions call `RvtFileInfo.Setup.exe` (`WixQuietExec` / `Wix4UtilCA_X64`). No Inno, no MSIX. UI: `WixUI_Minimal` + a small custom dialog. License `src/Installer/License.rtf`. Manufacturer **Metropolitan CIM**. Version **1.2.0.0**.
 
-## Install layout
+WiX 5: do not put `Win64` on `RegistrySearch`. `NeverOverwrite` belongs on `Component`, not `File`.
+
+## Products
+
+| MSI | Name | UpgradeCode | Setup verb |
+|-----|------|-------------|------------|
+| `RvtFileInfo-1.2.0-x64.msi` | RvtFileInfo | `{D1F4A8C3-2E67-4B90-8A15-6C3E9F0B2D47}` | `shell install\|uninstall` |
+| `RvtFileInfo.RevitAddin-1.2.0-x64.msi` | RvtFileInfo Revit Add-in | `{E2A5B9D4-3F78-4C01-9B26-7D4E0A1C3E58}` | none (files + registry) |
+| `RvtFileInfo.Manifests-1.2.0-x64.msi` | RvtFileInfo Revit Manifests | `{F3B6C0E5-4089-4D12-8C37-8E5F1B2D4F69}` | `manifests install\|uninstall` |
+
+WXS: `Package.wxs`, `Package.Addin.wxs`, `Package.Manifests.wxs`. `build.ps1` stages `artifacts\stage\shell`, `addin`, `manifests`.
+
+Older 1.0/1.1 combined MSI: Explorer 1.2.0 major-upgrades it via the Explorer UpgradeCode. Then install add-in + manifests.
+
+## Layout
+
+Explorer (`%ProgramFiles%\RvtFileInfo\`):
 ```
-%ProgramFiles%\RvtFileInfo\
-  RvtFileInfo.ShellHandler.dll
-  RvtFileInfo.Store.dll
-  RvtFileInfo.propdesc
-  rvtinfo.exe                       # CLI tool
-  RegisterSchema.exe                # helper (or MSI custom action)
-  RevitAddin\2025\*  RevitAddin\2026\*  RevitAddin\2027\*   # Track B only
-%ProgramData%\RvtFileInfo\
-  picklists.json  (sample, preserved on upgrade)  logs\
-%ProgramData%\Autodesk\Revit\Addins\<year>\RvtFileInfo.addin   # Track B only
+RvtFileInfo.Setup.exe          # self-contained net8 win-x64
+RvtFileInfo.ShellHandler.dll
+RvtFileInfo.Store.dll
+RvtFileInfo.propdesc
+cli\rvtinfo.exe                # + Store.dll
 ```
 
-## Install sequence (all elevated)
-1. Copy files.
-2. **Backup**: write `HKLM\SOFTWARE\RvtFileInfo\OriginalPropertyHandler` (existing `.rvt` handler CLSID, if any) and the original `FullDetails/PreviewDetails/InfoTip` strings.
-3. Register COM class (`InprocServer32`, Approved list).
-4. `PSRegisterPropertySchema("...\RvtFileInfo.propdesc")` → `PSRefreshPropertySchema()`.
-5. Register `.rvt` property handler + append our properties to `FullDetails`, `PreviewDetails`, `InfoTip`.
-6. Track B: detect Revit 2025/2026/2027 and write `.addin` manifests (+ `INSTALLALLYEARS` option).
-7. `SHChangeNotify(SHCNE_ASSOCCHANGED, ...)`; offer to restart Explorer (`taskkill /f /im explorer.exe` + relaunch) — **opt-in checkbox**, default on, never in silent mode unless `RESTARTEXPLORER=1`.
+Add-in:
+```
+%ProgramFiles%\RvtFileInfo\RevitAddin\2025|2026|2027\
+  RvtFileInfo.RevitAddin.dll, .deps.json, RvtFileInfo.Store.dll, RvtFileInfo.Store.Net.dll
+%ProgramData%\RvtFileInfo\picklists.json   # Component NeverOverwrite=yes
+HKLM\SOFTWARE\RvtFileInfo.Addin\InstallDir = [ADDINFOLDER]
+```
 
-## Uninstall sequence
-Reverse order: remove manifests → restore original `.rvt` handler and detail strings → `PSUnregisterPropertySchema` → unregister COM → delete files; leave `%ProgramData%\RvtFileInfo\picklists.json` only if the user changed it (otherwise remove). Verify no leftovers (see tests).
+Manifests:
+```
+%ProgramFiles%\RvtFileInfo\Manifests\RvtFileInfo.Setup.exe
+→ writes %ProgramData%\Autodesk\Revit\Addins\<year>\RvtFileInfo.addin
+```
 
-## Upgrade / repair
-- Major upgrade by `UpgradeCode`; if the handler DLL is in use by Explorer/prophost, schedule replacement at next Explorer restart (use Restart Manager via WiX `FilesInUse` handling) — **no reboot** needed in the normal path.
-- Repair re-runs registration steps idempotently.
+Logs: `%ProgramData%\RvtFileInfo\logs\setup.log` and `addin.log`.
 
-## UI & properties
-- Minimal wizard: licence (optional), install folder (default fixed), options: ☐ Install Revit add-in (Track B, default on), ☐ Restart Explorer, ☐ Install for all detected Revit years.
-- Public properties for silent installs: `INSTALLADDIN=0|1`, `INSTALLALLYEARS=0|1`, `RESTARTEXPLORER=0|1`.
-- Logging: `msiexec /i RvtFileInfo.msi /l*v install.log`.
+## Explorer install (`shell install [--restart 0|1]`)
+1. Refuse if not Windows 11 x64 build ≥ 22000.
+2. Backup previous property handlers per extension.
+3. Register COM, PropertyHandlers, Approved, schema, FullDetails/PreviewDetails/InfoTip (extension + SFA + ProgIDs).
+4. `SHChangeNotify(SHCNE_ASSOCCHANGED)`. Restart Explorer only if `--restart 1`.
+5. Do **not** write `.addin` files. Do **not** delete `SOFTWARE\RvtFileInfo.Manifests`.
 
-## Build & signing
-- `build.ps1 -Configuration Release` outputs `dist\RvtFileInfo-<version>-x64.msi` and a `dist\SHA256SUMS.txt`.
-- Sign DLLs and MSI with `signtool` if `$env:SIGN_CERT_THUMBPRINT` is set; otherwise skip with a warning.
+UI: Restart Explorer checkbox. Default `RESTARTEXPLORER=1` in UI (`DefaultRestart` after AppSearch); silent default `0` unless property set.
 
-## Pre-flight checks (installer must refuse politely)
-- Windows 11 (build ≥ 22000), x64. Admin rights.
-- Warn (not block) if no Revit 2025–2027 is detected in Track B (add-in manifests can still be installed with `INSTALLALLYEARS=1`).
+## Manifests install (`manifests install [--allyears 0|1] [--addindir PATH]`)
+`ADDINDIR` from MSI property, else registry `SOFTWARE\RvtFileInfo.Addin\InstallDir`, else `Program Files\RvtFileInfo\RevitAddin`. Skip year if DLL missing. Uninstall deletes listed `.addin` files and `SOFTWARE\RvtFileInfo.Manifests`.
 
-## Done when
-- Clean Windows 11 VM: install → columns available; uninstall → registry/file diff vs baseline is empty (except logs the user opted to keep).
+## Public properties
+| Property | Package | Silent default | Meaning |
+|----------|---------|----------------|---------|
+| `RESTARTEXPLORER` | Explorer | `0` | `1` restart Explorer |
+| `INSTALLALLYEARS` | Manifests | `0` | `1` = 2025–2027 (if DLLs exist) |
+| `ADDINDIR` | Manifests | registry / Program Files | folder containing `2025` `2026` `2027` |
+
+There is **no** `INSTALLADDIN`. Add-in is its own MSI.
+
+## Uninstall order
+Manifests → add-in → Explorer. Explorer uninstall restores handlers, unregisters schema, deletes `SOFTWARE\RvtFileInfo`, leaves streams in documents.
+
+## Build
+`.\build.ps1` → three MSIs + `dist\SHA256SUMS.txt`. Sign if `SIGN_CERT_THUMBPRINT` is set.
+
+## Silent
+```
+msiexec /i RvtFileInfo-1.2.0-x64.msi /qn RESTARTEXPLORER=1
+msiexec /i RvtFileInfo.RevitAddin-1.2.0-x64.msi /qn
+msiexec /i RvtFileInfo.Manifests-1.2.0-x64.msi /qn
+```

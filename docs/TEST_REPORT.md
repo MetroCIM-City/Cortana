@@ -8,7 +8,7 @@ Track: B. See [decisions/ADR-001-track-decision.md](decisions/ADR-001-track-deci
 
 | Suite | Result |
 |-------|--------|
-| `Store.Tests` | PASS, 0 failed. Unicode round-trip (Finnish, Arabic, CJK, emoji), 256-character limit, control-character stripping, other streams byte-identical, failpoint leaves the original file, locked file returns `0x80070020`, corrupt input fails closed, ADS and sidecar round-trip, copy/rename keeps the `RvtFileInfo` stream. |
+| `Store.Tests` | PASS, 0 failed. Unicode round-trip (Finnish, Arabic, CJK, emoji), 256-character limit, control-character stripping, other streams byte-identical, failpoint leaves the original file, locked file returns `0x80070020`, corrupt input fails closed, ADS and sidecar round-trip, copy/rename keeps the `RvtFileInfo` stream. Dummy DWG/PDF writes an appended OLE trailer; a copy of the file still reads the fields; host bytes are unchanged. |
 | `Store.Tests --perf` | PASS. Worst of 20 reads of a compound file with a 500 MB `Bulk` stream: **0.40 ms** (limit 50 ms). |
 | `ShellHandler.Tests` | PASS, 0 failed. `IPropertyStore` read/write/commit, read-only stream rejects `SetValue` with access denied, and a mock delegate returns `System.Title` = `FromMock` while Discipline stays on the file store. |
 | `Addin.Tests` | Passed 4, failed 0. File-newer imports, equal timestamps keep the model, empty model timestamp imports, empty file timestamp skips. |
@@ -25,7 +25,7 @@ Track: B. See [decisions/ADR-001-track-decision.md](decisions/ADR-001-track-deci
 | G3 Save | UNTESTED, same reason. |
 | G4 Save As | UNTESTED. |
 | G5 Sync with Central | UNTESTED. |
-| G6 Copy, rename, zip | PASS for S1. S2 survives an NTFS copy and is dropped by zip. S3 is a separate file. OneDrive copy was not run. |
+| G6 Copy, rename, zip | PASS for S1 (RVT/RFA). Dummy DWG/PDF trailers survive `CopyFile`. Zip of those files was not re-run in this session. S2/S3 remain as read fallbacks. OneDrive copy was not run. |
 | G7 Edit while Revit has the file open | Explorer UI UNTESTED. The store returns sharing violation; `Store.Tests` covers that path. |
 | G8 Thumbnail / preview | UNTESTED visually. The installer does not write the thumbnail shellex key. |
 
@@ -38,7 +38,7 @@ Track: B. See [decisions/ADR-001-track-decision.md](decisions/ADR-001-track-deci
 - A folder of 1000 files, and Windows Search (`Discipline:ARC`).
 - Locked-by-Revit behavior in the Explorer UI.
 - Thumbnails and preview, visually.
-- Explorer Details editing for `.rfa`, `.dwg`, `.nwd`, `.nwf`, `.nwc`, and `.pdf`. Unit tests cover a dummy DWG via ADS; the MSI was not reinstalled in Explorer after adding those extensions.
+- Explorer Details editing for `.rfa`, `.dwg`, `.nwd`, `.nwf`, `.nwc`, and `.pdf`. Unit tests cover a dummy DWG/PDF OLE trailer; the MSI was not reinstalled in Explorer after this change.
 - Revit 2027 open, save, save as, sync, import of a newer file store, and close without save. The add-in is built for `net10.0-windows` and was not loaded in Revit.
 - Revit 2025 runtime. The add-in is built for `net8.0-windows`. `Revit.exe` is not present.
 - Revit 2026 runtime. The add-in is built for `net8.0-windows` and was not run inside Revit.

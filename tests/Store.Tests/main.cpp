@@ -7,6 +7,7 @@
 #include <ole2.h>
 #include <shlwapi.h>
 
+#include <algorithm>
 #include <cstdio>
 #include <string>
 #include <vector>
@@ -279,25 +280,57 @@ void TestAlternateStores() {
     DeleteFileW(path.c_str());
 }
 
-void TestNonCompoundWrite() {
-    const std::wstring path = TempPath(L"sample.dwg");
+void WriteDummy(const std::wstring& path, const char* bytes, DWORD size) {
     DeleteFileW(path.c_str());
     HANDLE file = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-    const char header[] = "AC1032-dummy";
     DWORD written = 0;
-    WriteFile(file, header, sizeof(header), &written, nullptr);
+    WriteFile(file, bytes, size, &written, nullptr);
     CloseHandle(file);
+}
+
+void TestNonCompoundWrite() {
+    const std::wstring path = TempPath(L"sample.dwg");
+    const char header[] = "AC1032-dummy";
+    WriteDummy(path, header, sizeof(header));
+    const auto before = FileBytes(path);
     CHECK(!rfi::IsCompoundFile(path));
     CHECK(rfi::Ok(rfi::WriteFile(path, Sample())));
+    CHECK(!rfi::IsCompoundFile(path));
+    const auto after = FileBytes(path);
+    CHECK(after.size() > before.size());
+    CHECK(std::equal(before.begin(), before.end(), after.begin()));
     rfi::FileInfo read;
     bool found = false;
     CHECK(rfi::Ok(rfi::ReadFile(path, read, found)));
     CHECK(found);
     CHECK(read.program == L"Housing");
     CHECK(ReadNamed(path, nullptr, L"BasicFileInfo").empty());
-    DeleteFileW((path + L":RvtFileInfo").c_str());
-    DeleteFileW((path + L".fileinfo.json").c_str());
+
+    const std::wstring copied = TempPath(L"sample-copy.dwg");
+    CHECK(CopyFileW(path.c_str(), copied.c_str(), FALSE));
+    DeleteFileW((copied + L":RvtFileInfo").c_str());
+    DeleteFileW((copied + L".fileinfo.json").c_str());
+    CHECK(rfi::Ok(rfi::ReadFile(copied, read, found)));
+    CHECK(found);
+    CHECK(read.originator == L"ABC");
+
+    CHECK(rfi::Ok(rfi::WriteFile(path, Sample())));
+    const auto rewritten = FileBytes(path);
+    CHECK(rewritten.size() == after.size());
+    CHECK(std::equal(before.begin(), before.end(), rewritten.begin()));
+
+    const std::wstring pdf = TempPath(L"sample.pdf");
+    const char pdfBytes[] = "%PDF-1.4\n1 0 obj<<>>endobj\n%%EOF\n";
+    WriteDummy(pdf, pdfBytes, sizeof(pdfBytes) - 1);
+    CHECK(rfi::Ok(rfi::WriteFile(pdf, Sample())));
+    CHECK(rfi::Ok(rfi::ReadFile(pdf, read, found)));
+    CHECK(read.discipline == Sample().discipline);
+    const auto pdfAfter = FileBytes(pdf);
+    CHECK(std::equal(pdfBytes, pdfBytes + sizeof(pdfBytes) - 1, pdfAfter.begin()));
+
     DeleteFileW(path.c_str());
+    DeleteFileW(copied.c_str());
+    DeleteFileW(pdf.c_str());
 }
 
 void TestCopyRename() {

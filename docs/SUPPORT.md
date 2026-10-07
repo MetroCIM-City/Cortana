@@ -33,7 +33,7 @@ The thumbnail value under `HKCR\.rvt\shellex\{BB2E617C-0920-11d1-9A0B-00C04FC2D6
 "%ProgramFiles%\RvtFileInfo\cli\rvtinfo.exe" dump "C:\path\file.rvt" --streams
 ```
 
-`get` prints the seven fields. `dump --streams` lists compound-file streams and their sizes, then the field values. For DWG, Navisworks, and PDF, `get` / `set` use the NTFS alternate stream `file:RvtFileInfo` (or `file.ext.fileinfo.json` if ADS cannot be created). Zip copies do not keep ADS values.
+`get` prints the seven fields. `dump --streams` lists compound-file streams (RVT/RFA) or reports the appended OLE trailer (DWG, Navisworks, PDF). Those non-Revit files keep Details on copy, USB, and zip because the OLE payload is in the file. AutoCAD / Navisworks / Acrobat Save can strip the trailer.
 
 ## Pick lists
 
