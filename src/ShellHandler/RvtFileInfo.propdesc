@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Schema checked against the Windows property description schema.
+     canBePurged is omitted: a writable property (isInnate=false) cannot set canBePurged=false.
+     groupingRange=Discrete is how the schema expresses group-by.
+     https://learn.microsoft.com/en-us/windows/win32/properties/propdesc-schema-entry -->
+<schema xmlns="http://schemas.microsoft.com/windows/2006/propertydescription"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        schemaVersion="1.0">
+  <propertyDescriptionList publisher="RvtFileInfo" product="RvtFileInfo">
+    <propertyDescription name="RvtFileInfo.FileInfo" formatID="{6F3C2A91-8B14-4D5E-A7C2-19E4B8D07F31}" propID="100">
+      <searchInfo inInvertedIndex="false" isColumn="false" columnIndexType="NotIndexed"/>
+      <labelInfo label="File Info" sortDescription="General"/>
+      <typeInfo type="String" isInnate="true" isGroup="true" multipleValues="false"/>
+    </propertyDescription>
+    <propertyDescription name="RvtFileInfo.Discipline" formatID="{6F3C2A91-8B14-4D5E-A7C2-19E4B8D07F31}" propID="2">
+      <searchInfo inInvertedIndex="true" isColumn="true" isColumnSparse="false" columnIndexType="OnDisk" mnemonics="discipline"/>
+      <labelInfo label="Discipline" invitationText="Add Discipline" sortDescription="AToZ"/>
+      <typeInfo type="String" multipleValues="false" isInnate="false" isViewable="true" isQueryable="true" groupingRange="Discrete"/>
+      <displayInfo displayType="String" alignment="Left" relativeDescriptionType="General" defaultColumnWidth="16">
+        <editControl control="Text"/>
+      </displayInfo>
+    </propertyDescription>
+    <propertyDescription name="RvtFileInfo.Location" formatID="{6F3C2A91-8B14-4D5E-A7C2-19E4B8D07F31}" propID="3">
+      <searchInfo inInvertedIndex="true" isColumn="true" isColumnSparse="false" columnIndexType="OnDisk" mnemonics="location"/>
+      <labelInfo label="Location" invitationText="Add Location" sortDescription="AToZ"/>
+      <typeInfo type="String" multipleValues="false" isInnate="false" isViewable="true" isQueryable="true" groupingRange="Discrete"/>
+      <displayInfo displayType="String" alignment="Left" relativeDescriptionType="General" defaultColumnWidth="16">
+        <editControl control="Text"/>
+      </displayInfo>
+    </propertyDescription>
+    <propertyDescription name="RvtFileInfo.Originator" formatID="{6F3C2A91-8B14-4D5E-A7C2-19E4B8D07F31}" propID="4">
+      <searchInfo inInvertedIndex="true" isColumn="true" isColumnSparse="false" columnIndexType="OnDisk" mnemonics="originator"/>
+      <labelInfo label="Originator" invitationText="Add Originator" sortDescription="AToZ"/>
+      <typeInfo type="String" multipleValues="false" isInnate="false" isViewable="true" isQueryable="true" groupingRange="Discrete"/>
+      <displayInfo displayType="String" alignment="Left" relativeDescriptionType="General" defaultColumnWidth="16">
+        <editControl control="Text"/>
+      </displayInfo>
+    </propertyDescription>
+    <propertyDescription name="RvtFileInfo.SubDiscipline" formatID="{6F3C2A91-8B14-4D5E-A7C2-19E4B8D07F31}" propID="5">
+      <searchInfo inInvertedIndex="true" isColumn="true" isColumnSparse="false" columnIndexType="OnDisk" mnemonics="subdiscipline"/>
+      <labelInfo label="Sub Discipline" invitationText="Add Sub Discipline" sortDescription="AToZ"/>
+      <typeInfo type="String" multipleValues="false" isInnate="false" isViewable="true" isQueryable="true" groupingRange="Discrete"/>
+      <displayInfo displayType="String" alignment="Left" relativeDescriptionType="General" defaultColumnWidth="18">
+        <editControl control="Text"/>
+      </displayInfo>
+    </propertyDescription>
+    <propertyDescription name="RvtFileInfo.DocumentType" formatID="{6F3C2A91-8B14-4D5E-A7C2-19E4B8D07F31}" propID="6">
+      <searchInfo inInvertedIndex="true" isColumn="true" isColumnSparse="false" columnIndexType="OnDisk" mnemonics="documenttype"/>
+      <labelInfo label="Document Type" invitationText="Add Document Type" sortDescription="AToZ"/>
+      <typeInfo type="String" multipleValues="false" isInnate="false" isViewable="true" isQueryable="true" groupingRange="Discrete"/>
+      <displayInfo displayType="String" alignment="Left" relativeDescriptionType="General" defaultColumnWidth="18">
+        <editControl control="Text"/>
+      </displayInfo>
+    </propertyDescription>
+    <propertyDescription name="RvtFileInfo.Program" formatID="{6F3C2A91-8B14-4D5E-A7C2-19E4B8D07F31}" propID="7">
+      <searchInfo inInvertedIndex="true" isColumn="true" isColumnSparse="false" columnIndexType="OnDisk" mnemonics="program"/>
+      <labelInfo label="Program" invitationText="Add Program" sortDescription="AToZ"/>
+      <typeInfo type="String" multipleValues="false" isInnate="false" isViewable="true" isQueryable="true" groupingRange="Discrete"/>
+      <displayInfo displayType="String" alignment="Left" relativeDescriptionType="General" defaultColumnWidth="16">
+        <editControl control="Text"/>
+      </displayInfo>
+    </propertyDescription>
+    <propertyDescription name="RvtFileInfo.SubProgram" formatID="{6F3C2A91-8B14-4D5E-A7C2-19E4B8D07F31}" propID="8">
+      <searchInfo inInvertedIndex="true" isColumn="true" isColumnSparse="false" columnIndexType="OnDisk" mnemonics="subprogram"/>
+      <labelInfo label="Sub Program" invitationText="Add Sub Program" sortDescription="AToZ"/>
+      <typeInfo type="String" multipleValues="false" isInnate="false" isViewable="true" isQueryable="true" groupingRange="Discrete"/>
+      <displayInfo displayType="String" alignment="Left" relativeDescriptionType="General" defaultColumnWidth="16">
+        <editControl control="Text"/>
+      </displayInfo>
+    </propertyDescription>
+  </propertyDescriptionList>
+</schema>

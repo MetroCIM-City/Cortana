@@ -1,0 +1,13 @@
+<Project Sdk="WixToolset.Sdk/5.0.2">
+  <PropertyGroup>
+    <OutputName>RvtFileInfo-1.0.0-x64</OutputName>
+    <InstallerPlatform>x64</InstallerPlatform>
+    <OutputType>Package</OutputType>
+    <SuppressIces>ICE61</SuppressIces>
+    <DefineConstants>StageDir=$(StageDir);LicenseRtf=$(LicenseRtf)</DefineConstants>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="WixToolset.Util.wixext" Version="5.0.2" />
+    <PackageReference Include="WixToolset.UI.wixext" Version="5.0.2" />
+  </ItemGroup>
+</Project>

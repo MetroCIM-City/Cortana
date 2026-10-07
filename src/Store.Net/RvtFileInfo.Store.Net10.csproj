@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>RvtFileInfo.Store</RootNamespace>
+    <AssemblyName>RvtFileInfo.Store.Net</AssemblyName>
+    <LangVersion>latest</LangVersion>
+  </PropertyGroup>
+  <Target Name="CopyNativeStore" AfterTargets="Build">
+    <PropertyGroup>
+      <_NativeDll>$(MSBuildThisFileDirectory)..\..\artifacts\native\RvtFileInfo.Store.dll</_NativeDll>
+    </PropertyGroup>
+    <Copy SourceFiles="$(_NativeDll)" DestinationFolder="$(OutputPath)" SkipUnchangedFiles="true" Condition="Exists('$(_NativeDll)')" />
+  </Target>
+</Project>

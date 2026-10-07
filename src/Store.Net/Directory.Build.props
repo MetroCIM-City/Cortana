@@ -1,0 +1,9 @@
+<Project>
+  <PropertyGroup Condition="'$(MSBuildProjectName)' == 'RvtFileInfo.Store.Net10'">
+    <BaseIntermediateOutputPath>obj\net10\</BaseIntermediateOutputPath>
+    <MSBuildProjectExtensionsPath>$(BaseIntermediateOutputPath)</MSBuildProjectExtensionsPath>
+    <BaseOutputPath>bin\net10\</BaseOutputPath>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <DefaultItemExcludes>$(DefaultItemExcludes);obj/**;bin/**</DefaultItemExcludes>
+  </PropertyGroup>
+</Project>

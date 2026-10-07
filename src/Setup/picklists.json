@@ -1,0 +1,9 @@
+{
+  "Discipline": ["Architectural", "Structural", "Mechanical", "Electrical", "Plumbing"],
+  "Location": ["L01", "L02", "Roof"],
+  "Originator": [],
+  "Sub Discipline": ["Facade", "Core", "Site"],
+  "Document Type": ["Model", "Sheet", "Detail"],
+  "Program": ["Housing", "Education", "Healthcare"],
+  "Sub Program": ["Phase1", "Phase2"]
+}

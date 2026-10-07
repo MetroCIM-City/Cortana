@@ -1,0 +1,52 @@
+# RvtFileInfo shell registration baseline
+
+Captured on this machine before installing RvtFileInfo. Source: `reg query` of the live registry.
+Thumbnail handler is Autodesk's. There is no property handler and no FullDetails/PreviewDetails/InfoTip for `.rvt`.
+
+## HKCR\.rvt
+
+```
+HKEY_CLASSES_ROOT\.rvt
+    (Default)    REG_SZ    Revit.Project
+
+HKEY_CLASSES_ROOT\.rvt\shellex\{BB2E617C-0920-11d1-9A0B-00C04FC2D6C1}
+    (Default)    REG_SZ    {2E559A13-E91E-4DEB-8996-3B594FC11AC4}
+```
+
+`{BB2E617C-0920-11d1-9A0B-00C04FC2D6C1}` is the thumbnail extractor slot. Do not change it.
+
+## Thumbnail CLSID
+
+```
+HKEY_CLASSES_ROOT\CLSID\{2E559A13-E91E-4DEB-8996-3B594FC11AC4}
+    (Default)    REG_SZ    Revit File Thumbnail 2.0 Class
+    InprocServer32 = C:\Program Files\Common Files\Autodesk Shared\Revit Shared\Revit.Thumbnail20.dll
+    ThreadingModel = Apartment
+    ProgID = Revit.Thumbnail.2
+```
+
+## HKCR\Revit.Project
+
+```
+(Default) = Autodesk Revit Project
+DefaultIcon = "C:\Program Files\Common Files\Autodesk Shared\Shell\2027\MFCDoc.ico"
+shell\open\command = "C:\Program Files\Autodesk\Revit 2027\Revit.exe" /dde
+```
+
+No FullDetails, PreviewDetails, or InfoTip values.
+
+## Property handler
+
+`HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\PropertySystem\PropertyHandlers\.rvt` does not exist.
+
+## SystemFileAssociations
+
+`HKCR\SystemFileAssociations\.rvt` does not exist.
+
+## Decision
+
+Register RvtFileInfo as the `.rvt` property handler directly. Do not aggregate, because there is no existing property handler. Keep the thumbnail registration untouched. Create FullDetails, PreviewDetails, and InfoTip rather than appending to an existing string. Uninstall deletes those values if this baseline had none.
+
+## Search indexing
+
+No PersistentHandler is registered for `.rvt` or `Revit.Project`. RvtFileInfo does not create one. Explorer columns and the Details tab use the property handler. Windows Search for `Discipline:Arch` may need a reindex and may still ignore the property until a persistent handler exists. That limitation is recorded in the test report.

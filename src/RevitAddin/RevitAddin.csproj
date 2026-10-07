@@ -1,0 +1,48 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <UseWPF>true</UseWPF>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <PlatformTarget>x64</PlatformTarget>
+    <Platforms>x64</Platforms>
+    <Configurations>R25;R26;R27</Configurations>
+    <RootNamespace>RvtFileInfo.RevitAddin</RootNamespace>
+    <AssemblyName>RvtFileInfo.RevitAddin</AssemblyName>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <OutputPath>bin\$(Configuration)\</OutputPath>
+    <EnableDynamicLoading>true</EnableDynamicLoading>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)'=='R25'">
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <RevitPackageVersion>2025.4.60</RevitPackageVersion>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)'=='R26'">
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <RevitPackageVersion>2026.4.10</RevitPackageVersion>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)'=='R27'">
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <RevitPackageVersion>2027.3.0</RevitPackageVersion>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Nice3point.Revit.Api.RevitAPI" Version="$(RevitPackageVersion)">
+      <ExcludeAssets>runtime</ExcludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+    <PackageReference Include="Nice3point.Revit.Api.RevitAPIUI" Version="$(RevitPackageVersion)">
+      <ExcludeAssets>runtime</ExcludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+  </ItemGroup>
+  <ItemGroup Condition="'$(Configuration)'!='R27'">
+    <ProjectReference Include="..\Store.Net\RvtFileInfo.Store.Net.csproj" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(Configuration)'=='R27'">
+    <ProjectReference Include="..\Store.Net\RvtFileInfo.Store.Net10.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="Resources\icon16.png" />
+    <EmbeddedResource Include="Resources\icon32.png" />
+  </ItemGroup>
+</Project>
